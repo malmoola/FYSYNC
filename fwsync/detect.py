@@ -33,7 +33,7 @@ def route_table(cfg):
         rt.append({'net': str(net), 'set': IPSet.net(str(net)), 'plen': net.prefixlen, 'ifc': n, 'nexthop': '',
                    'kind': 'connected', 'distance': 0})
     for r in cfg.routes:
-        if r.ifc not in u:
+        if r.ifc not in u or getattr(r, 'tunneled', False):
             continue
         try:
             net = _net(r.network, r.mask)
@@ -83,11 +83,17 @@ def roles(cfg):
     u = {n: i for n, i in usable_ifcs(cfg).items() if n not in cfg.ignored}
     out = {}
     for r in cfg.routes:
-        if r.network == '0.0.0.0' and r.mask == '0.0.0.0' and r.ifc in u:
+        if r.network == '0.0.0.0' and r.mask == '0.0.0.0' and r.ifc in u and not getattr(r, 'tunneled', False):
             out.setdefault(r.ifc, ('outside', 'default route'))
+    has_default = bool(out)
+
+    def public_ifc(name):
+        i = u[name]
+        return bool(i.ip) and is_public(IPSet.net(i.ip, i.mask))
     for n in cfg.nats:
         if n.mapped_ifc in u and n.real_ifc != n.mapped_ifc and n.mapped is not None and not n.mapped.is_any() \
-                and is_public(n.mapped) and n.mapped_ifc not in out and n.real_ifc != 'any':
+                and is_public(n.mapped) and n.mapped_ifc not in out and n.real_ifc != 'any' \
+                and (not has_default or public_ifc(n.mapped_ifc)):
             out[n.mapped_ifc] = ('outside', 'public NAT mapped addresses')
     for n in u:
         out.setdefault(n, ('inside', 'no default route, no public NAT'))
@@ -197,11 +203,34 @@ def _match_b(a, a_cfg, b_cfg, cands, ra):
     return cands[0], 'guess', 'ambiguous: %d B %s interfaces, no name/level/routing match' % (len(cands), ra)
 
 
+def _connected(cfg, name):
+    i = cfg.interfaces.get(name)
+    return str(_net(i.ip, i.mask)) if i is not None and i.ip else ''
+
+
 def map_interfaces(A, B, ra, rb):
+    """the same connected subnet is the strongest match, whatever the name or role; a name match with different
+    subnets, or a fallback match, is kept but flagged"""
     rows = []
+    by_net = {}
+    for n in rb:
+        if _connected(B, n):
+            by_net.setdefault(_connected(B, n), n)
     for a, (role, why) in ra.items():
+        net = _connected(A, a)
+        if net and net in by_net:
+            b = by_net[net]
+            rows.append({'a': a, 'a_role': role, 'a_reason': why, 'b': b, 'b_role': rb[b][0], 'how': 'same subnet',
+                         'flag': '', 'note': ''})
+            continue
         cands = [n for n, (r, w) in rb.items() if r == role]
         b, how, flag = _match_b(a, A, B, cands, role)
+        if b and role == 'inside' and not flag:
+            bnet = _connected(B, b)
+            if b.lower() == a.lower():
+                flag = 'same name, different subnet: A %s, B %s' % (net or '?', bnet or '?')
+            else:
+                flag = 'no B interface has %s: check this match or set it with --map' % (net or 'this subnet')
         rows.append({'a': a, 'a_role': role, 'a_reason': why, 'b': b, 'b_role': rb.get(b, ('', ''))[0], 'how': how,
                      'flag': flag, 'note': ''})
     per_b = {}

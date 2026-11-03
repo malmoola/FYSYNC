@@ -9,6 +9,7 @@ from .osutil import protect
 SECTIONS = [('rules', 'Access rules A -> B', ['id', 'path', 'scope', 'status', 'action_check', 'policy', 'rule', 'intersected_with', 'src_ifc',
                                             'dst_ifc', 'b_src_ifc', 'b_dst_ifc', 'src', 'dst', 'service', 'direction', 'detail',
                                             'b_rules']),
+            ('firewide', 'Whole-firewall checks (not limited to the scope)', ['id', 'check', 'status', 'item', 'detail', 'line']),
             ('held_rules', 'Rules held out of the compare (L7 action unknown by name, or marked block)',
              ['id', 'path', 'scope', 'status', 'rule', 'src_ifc', 'dst_ifc', 'src', 'dst', 'service', 'detail']),
             ('b_rules', 'Access rules B -> A (over-permitted = B allows more than A)',
@@ -88,6 +89,7 @@ def write_html(res, path, title='fwsync report'):
            '<h1>%s</h1><p class=small>%s &rarr; %s &middot; %d scope subnets &middot; mode %s</p>' % (
                e(title), e(n['A']), e(n['B']), len(res['scope']), e(res.get('mode', '1:1')))]
     out += readiness_html(res)
+    out += firewide_html(res)
     out += findings_html(res)
     out += decisions_html(res)
     out += plan_html(res)
@@ -121,6 +123,18 @@ def write_html(res, path, title='fwsync report'):
     out.append("""<script>function flt(i){const t=i.closest('table'),c=[...t.rows[1].cells].map(x=>x.firstChild.value.toLowerCase());
 for(const r of [...t.rows].slice(2)){r.style.display=c.every((v,k)=>!v||r.cells[k].textContent.toLowerCase().includes(v))?'':'none'}}</script>""")
     Path(path).write_text('\n'.join(out), encoding='utf-8')
+
+
+def firewide_html(res):
+    e = html.escape
+    rows = res.get('firewide', [])
+    if not rows:
+        return []
+    out = ['<h2>Whole-firewall checks (%d)</h2><p class=small>Readiness above covers only the scope subnets. '
+           'These checks cover the whole firewall.</p><table><tr><th>check</th><th>item</th><th>detail</th></tr>' % len(rows)]
+    for r in rows:
+        out.append('<tr><td>%s</td><td>%s</td><td>%s</td></tr>' % (e(r['check']), e(r['item']), e(r['detail'])))
+    return out + ['</table>']
 
 
 def readiness_html(res):

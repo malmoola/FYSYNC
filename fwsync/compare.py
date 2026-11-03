@@ -224,12 +224,78 @@ def compare_rules_reverse(A, B, prof):
             continue
         results = [eval_slice(a_rules, False, False, s, d, r.svc) for s, d in cubes]
         worst = max(results, key=lambda x: ORDER.index(x[0]))
+        twin = _same_on_a(r, a_rules, prof)
+        if twin is not None:
+            worst = ('covered', [twin])
+            results = [worst]
         out.append({'id': 'BR%d' % r.seq, 'policy': r.policy, 'rule': r.rule_name, 'rule_id': r.rule_id,
                     'src_ifc': r.src_ifc or 'any', 'dst_ifc': r.dst_ifc or 'any', 'src': r.src_ref, 'dst': r.dst_ref,
                     'service': r.svc_ref, 'scope': prof.scope_label(r.src | r.dst), 'scopes': scope_split(prof, r.src, r.dst)[0],
                     'scopes_any': scope_split(prof, r.src, r.dst)[1], 'status': names[worst[0]],
                     'a_rules': sorted({'%s #%d' % (m.rule_name or m.rule_id or '', m.seq) for x in results for m in x[1]})[:8],
                     'line': r.line, '_rule': r})
+    return out
+
+
+def _same_addr(a, b, a_ref, b_ref):
+    """equal addresses; 'any' on both sides also counts (an ignored interface narrows A's copy of any)"""
+    return a == b or a_ref == b_ref == 'any'
+
+
+def _same_on_a(r, a_rules, prof):
+    """the A permit with the same mapped interfaces, addresses and service: B allows nothing more with this rule"""
+    for a in a_rules:
+        if a.action in PERMIT and prof.map_ifc(a.src_ifc) == r.src_ifc and prof.map_ifc(a.dst_ifc) == r.dst_ifc \
+                and _same_addr(a.src, r.src, a.src_ref, r.src_ref) and _same_addr(a.dst, r.dst, a.dst_ref, r.dst_ref) \
+                and repr(a.svc.items) == repr(r.svc.items):
+            return a
+    return None
+
+
+def compare_firewide(A, B, prof):
+    """checks that do not depend on the scope: A blocks with no equal on B, published A addresses with no B NAT, and
+    B rules whose source is not behind their source interface"""
+    from .detect import route_split
+    from .netset import is_public
+    out = []
+    b_rules, a_rules = effective_rules(B), effective_rules(A)
+    b_denies = [r for r in b_rules if r.action == 'deny' and not (r.src.is_any() and r.dst.is_any() and r.src_ifc is None)]
+    seen = {}
+    for r in a_rules:
+        if r.action != 'deny' or (r.src.is_any() and r.dst.is_any() and r.src_ifc is None and r.dst_ifc is None):
+            continue
+        si, di = prof.map_ifc(r.src_ifc), prof.map_ifc(r.dst_ifc)
+        ok = any(x.src_ifc in (None, si) and x.dst_ifc in (None, di) and r.src.issubset(x.src) and r.dst.issubset(x.dst)
+                 and repr(x.svc.items) == repr(r.svc.items) for x in b_denies)
+        if not ok:
+            seen.setdefault(r.rule_name or r.rule_id or r.line, []).append(r)
+    for name, rs in seen.items():
+        out.append({'id': 'FW-D-%s' % name, 'check': 'A block missing on B', 'status': 'missing', 'item': name,
+                    'detail': '%d line(s), e.g. %s' % (len(rs), rs[0].line), 'line': getattr(rs[0], 'lineno', 0)})
+    b_mapped = IPSet()
+    for n in B.nats:
+        if n.kind == 'static' and n.mapped is not None and not n.mapped.is_any() and n.mapped != n.real:
+            b_mapped = b_mapped | n.mapped
+    outs = set(prof.outside_a)
+    for n in A.nats:
+        if n.kind != 'static' or n.inactive or n.mapped is None or n.mapped.is_any() or n.mapped == n.real \
+                or n.mapped_ifc not in outs or not is_public(n.mapped) or n.mapped.issubset(b_mapped):
+            continue
+        out.append({'id': 'FW-N-%s' % repr(n.mapped), 'check': 'published on A, no NAT on B', 'status': 'missing',
+                    'item': repr(n.mapped), 'detail': '%s (%s) -> %s' % (n.real_ref, repr(n.real), n.mapped_ref),
+                    'line': getattr(n, 'lineno', 0)})
+    done = set()
+    for r in b_rules:
+        if r.action not in PERMIT or not r.src_ifc or r.src.is_any() or r.src_ifc in prof.outside_b:
+            continue
+        ifcs = {i for i, x in route_split(B, r.src)}
+        name = r.rule_name or r.rule_id
+        if r.src_ifc not in ifcs and name not in done:
+            done.add(name)
+            out.append({'id': 'FW-R-%s' % name, 'check': 'B rule source not behind its interface', 'status': 'never matches',
+                        'item': name, 'detail': 'source interface %s, but %s routes via %s' % (
+                            r.src_ifc, r.src_ref, ', '.join(sorted(i or 'nothing' for i in ifcs))),
+                        'line': getattr(r, 'lineno', 0)})
     return out
 
 
@@ -468,13 +534,12 @@ def compare_nat(A, B, prof):
     for p in prof.scope:
         s = IPSet.parse(p)
         for side, cfg, outs in sides:
-            so = natorder.out_ifc(cfg, outs)
             if side == 'A':
                 si = a_si = natorder.src_ifc(cfg, s)
             else:
                 si = prof.map_ifc(a_si) if a_si else None
                 si = si if si in cfg.interfaces else None
-            eff = natorder.effective(cfg, s, si, so)
+            eff, so = natorder.best_effective(cfg, s, si, outs)
             hit = [(part, n) for part, n in eff if n is not None]
             cov = IPSet()
             for part, n in hit:
@@ -685,7 +750,7 @@ def _group_addrs(cfg, o, seen=None):
 
 
 SECTIONS = ('rules', 'nat', 'pat', 'pat_detail', 'public', 'inbound', 'dns', 'routing', 'objects',
-            'b_rules', 'b_nat', 'b_objects', 'held_rules')
+            'b_rules', 'b_nat', 'b_objects', 'held_rules', 'firewide')
 
 
 def compare(A, B, prof, parts=('rules', 'nat', 'objects', 'routing', 'reverse')):
@@ -707,6 +772,8 @@ def compare(A, B, prof, parts=('rules', 'nat', 'objects', 'routing', 'reverse'))
         res['b_rules'] = compare_rules_reverse(A, B, prof)
         res['b_nat'] = compare_nat_reverse(A, B, prof)
         res['b_objects'] = compare_objects_reverse(A, B, prof)
+    if 'rules' in parts:
+        res['firewide'] = compare_firewide(A, B, prof)
     res['counts'] = counts(res)
     res['counts']['l7_actions'] = l7_counts(res)
     res['summary'] = summary(res, prof)
