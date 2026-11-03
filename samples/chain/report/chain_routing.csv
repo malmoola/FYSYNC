@@ -1,0 +1,5 @@
+id,scope,subnet,status,a_ifc,a_role,expected_b_ifc,b_route,b_next_hop,detail
+RT-10.0.0.0/29,A1:inside,10.0.0.0/29,wrong way,A1:inside,inside,INSIDE,10.0.0.0/29 via OUTSIDE (wrong way),0.0.0.0/0 203.0.113.1,
+RT-10.50.0.0/16,DC-NET,10.50.0.0/16,ok,A2:DC-IN,inside,INSIDE,10.50.0.0/16 via INSIDE (ok),10.50.0.0/16 10.9.0.2,
+RT-10.60.0.0/16,CAMPUS-NET,10.60.0.0/16,wrong way,A1:inside,inside,INSIDE,10.60.0.0/16 via OUTSIDE (wrong way),0.0.0.0/0 203.0.113.1,
+RT-10.50.0.0/24,A2:DC-IN,10.50.0.0/24,ok,A2:DC-IN,inside,INSIDE,10.50.0.0/24 via INSIDE (ok),10.50.0.0/16 10.9.0.2,

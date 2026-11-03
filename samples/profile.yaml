@@ -1,0 +1,11 @@
+# Profile for the synthetic sample configs (edge-a -> edge-b).
+name: sample
+type: standard
+scope: [10.20.0.0/24]
+scope_names: {10.20.0.0/24: VLAN 20}
+interface_map: {inside: INSIDE, outside: OUTSIDE}
+outside_a: [outside]
+outside_b: [OUTSIDE]
+public_pool_b: [203.0.113.50-203.0.113.52]
+zone_map: {INSIDE: Z_IN, OUTSIDE: Z_OUT}
+fmc: {access_policy: ACP-B, nat_policy: NAT-B}

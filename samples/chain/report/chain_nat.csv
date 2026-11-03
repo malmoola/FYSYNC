@@ -1,0 +1,4 @@
+id,scope,status,section,kind,a_ifc,real_ref,real,a_mapped,a_dst,a_inactive,b_nat,b_mapped,proposed_b_mapped,description,detail
+N1,DC-NET,match,manual-before,static,A1:inside->A1:outside,WEB,10.50.1.10/32,198.51.100.10/32,,False,#1 WEB-SERVER,203.0.113.10,,,
+N2,"DC-NET, A2:DC-IN",match,manual-after,dynamic PAT,A1:inside->A1:outside,DC-NET,10.50.0.0/16,interface,,False,#2 DC-NET,interface,,,
+N3,CAMPUS-NET,missing,manual-after,dynamic PAT,A1:inside->A1:outside,CAMPUS-NET,10.60.0.0/16,interface,,False,,,,,

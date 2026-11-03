@@ -1,0 +1,57 @@
+# fwsync profile (YAML). Needs PyYAML (pip install "fwsync[yaml]"); the same keys work in JSON.
+# A = the firewall you copy FROM, B = the firewall you check / build. Use --reverse for B -> A.
+# Since 0.2.0 every key is optional: whatever you leave out is auto-detected from the configs
+# (run `fwsync detect A.txt B.txt --save-profile p.yaml` to start from the detected values).
+
+name: example-edge-to-backup        # free text, shown in the reports
+
+# auto         : (default) shared-edge when A's and B's public ranges overlap, else standard.
+# standard     : B is a different site / ISP; B public IPs may (and usually must) differ from A.
+# shared-edge  : two edge firewalls on ONE shared public subnet (both BGP to the same border routers);
+#                every static NAT on B must use exactly the same mapped (public) IP as on A.
+type: standard
+
+# Only rules, NAT and objects that touch these prefixes are compared.
+scope:
+  - 192.0.2.0/24
+  - 198.51.100.0/25
+scope_names:                        # optional labels used in the reports
+  192.0.2.0/24: VLAN 10
+  198.51.100.0/25: VLAN 20
+
+# A nameif -> B nameif. Unlisted names are assumed to be the same on both sides.
+interface_map:
+  inside: INSIDE
+  outside: OUTSIDE
+  outside-backup: OUTSIDE           # several A interfaces may map to one B interface
+
+# Internet-facing interfaces (inbound readiness, PAT, public IP checks). Empty = names containing "out".
+outside_a: [outside, outside-backup]
+outside_b: [OUTSIDE]
+
+# B public address space. Empty = derived from B: OUTSIDE interface subnet + mapped IPs of B's NAT rules.
+public_b:
+  - 203.0.113.0/26
+
+# Fixed A public IP -> B public IP (used first for missing static NATs).
+public_map:
+  198.51.100.200: 203.0.113.10
+
+# Otherwise free B public IPs are taken from this pool, skipping any address B already uses.
+public_pool_b:
+  - 203.0.113.32-203.0.113.47
+
+# Object renames applied before name comparison and in generated payloads (regular expressions, in order).
+rename:
+  - {pattern: "^SRV_", replace: "B_SRV_"}
+  - {pattern: "\\.example\\.com$", replace: ""}
+
+# B nameif -> FMC security zone name, used in the FMC payloads.
+zone_map:
+  INSIDE: INSIDE_ZONE
+  OUTSIDE: OUTSIDE_ZONE
+
+# FMC policy names on B (payload paths are resolved to ids at push time).
+fmc:
+  access_policy: B-Access-Policy
+  nat_policy: B-NAT-Policy

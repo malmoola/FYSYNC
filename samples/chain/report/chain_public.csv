@@ -1,0 +1,4 @@
+id,scope,subnet,a_static_active,b_missing,b_inactive,pub_a,pub_b,pub_b_nats,b_public_needed,b_public_new,b_public_available,status
+PUB-10.50.0.0/16,DC-NET,10.50.0.0/16,1,0,0,0,0,0,0,0,,ok
+PUB-TOTAL,total,203.0.113.0/24,,0,0,,,,0,0,251,ok (B ranges assumed from config)
+PUB-B-203.0.113.0/24,B used,203.0.113.0/24,,,,,,,,,,1 used: 203.0.113.10

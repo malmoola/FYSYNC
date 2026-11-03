@@ -1,0 +1,9 @@
+id,scope,side,firewall,subnet,order,line,status,kind,object,addresses,count,mapped,section
+PD-A-none-10.10.0.0/24,VLAN 10 inside,A,edge-a.txt,10.10.0.0/24,,,not translated,,,10.10.0.0/24,256,,
+PD-B-none-10.10.0.0/24,VLAN 10 inside,B,edge-b.txt,10.10.0.0/24,,,not translated,,,10.10.0.0/24,256,,
+PD-A-1-10.20.0.0/24,LAN20,A,edge-a.txt,10.20.0.0/24,1,52,translated,1:1,WEB1,10.20.0.10/32,1,PUB_WEB1,manual-before
+PD-A-2-10.20.0.0/24,LAN20,A,edge-a.txt,10.20.0.0/24,2,53,translated,1:1,WEB2,10.20.0.11/32,1,PUB_WEB2,manual-before
+PD-A-4-10.20.0.0/24,LAN20,A,edge-a.txt,10.20.0.0/24,3,56,translated,shared,RANGE1,"10.20.0.100/30, 10.20.0.104/30, 10.20.0.108/31, 10.20.0.110/32",11,PAT_LAN20,auto
+PD-A-3-10.20.0.0/24,LAN20,A,edge-a.txt,10.20.0.0/24,4,54,translated,shared,LAN20,"10.20.0.0/29, 10.20.0.8/31, 10.20.0.12/30, 10.20.0.16/28, 10.20.0.32/27, 10.20.0.64/27 ...(+4)",243,interface,manual-after
+PD-B-1-10.20.0.0/24,LAN20,B,edge-b.txt,10.20.0.0/24,1,27,translated,1:1,WEB1,10.20.0.10/32,1,B_PUB_WEB1,manual-before
+PD-B-none-10.20.0.0/24,LAN20,B,edge-b.txt,10.20.0.0/24,,,not translated,,,"10.20.0.0/29, 10.20.0.8/31, 10.20.0.11/32, 10.20.0.12/30, 10.20.0.16/28, 10.20.0.32/27 ...(+2)",255,,

@@ -1,0 +1,3 @@
+id,scope,status,object,real,a_public,b_public,ports,a_rules,b_rules
+I1,LAN20,"nat ok, rule partial",WEB1,10.20.0.10/32,198.51.100.10,203.0.113.10,tcp WEBPORTS,Web-In,Web-In
+I2,LAN20,"nat inactive on B, rule missing",WEB2,10.20.0.11/32,198.51.100.11,203.0.113.11,tcp eq 443,Web2-In,

@@ -1,0 +1,10 @@
+id,scope,side,firewall,subnet,order,line,status,kind,object,addresses,count,mapped,section
+PD-A-none-10.0.0.0/29,A1:inside,A,edge.txt + inner.txt,10.0.0.0/29,,,not translated,,,10.0.0.0/29,8,,
+PD-B-none-10.0.0.0/29,A1:inside,B,target.txt,10.0.0.0/29,,,not translated,,,10.0.0.0/29,8,,
+PD-A-none-10.50.0.0/16,DC-NET,A,edge.txt + inner.txt,10.50.0.0/16,,,not translated,,,10.50.0.0/16,65536,,
+PD-B-1-10.50.0.0/16,DC-NET,B,target.txt,10.50.0.0/16,1,32,translated,1:1,WEB-SERVER,10.50.1.10/32,1,PUB_WEB,manual-before
+PD-B-2-10.50.0.0/16,DC-NET,B,target.txt,10.50.0.0/16,2,33,translated,shared,DC-NET,"10.50.0.0/24, 10.50.1.0/29, 10.50.1.8/31, 10.50.1.11/32, 10.50.1.12/30, 10.50.1.16/28 ...(+10)",65535,interface,manual-after
+PD-A-3-10.60.0.0/16,CAMPUS-NET,A,edge.txt + inner.txt,10.60.0.0/16,3,44,translated,shared,CAMPUS-NET,10.60.0.0/16,65536,interface,manual-after
+PD-B-none-10.60.0.0/16,CAMPUS-NET,B,target.txt,10.60.0.0/16,,,not translated,,,10.60.0.0/16,65536,,
+PD-A-none-10.50.0.0/24,A2:DC-IN,A,edge.txt + inner.txt,10.50.0.0/24,,,not translated,,,10.50.0.0/24,256,,
+PD-B-2-10.50.0.0/24,A2:DC-IN,B,target.txt,10.50.0.0/24,2,33,translated,shared,DC-NET,10.50.0.0/24,256,interface,manual-after

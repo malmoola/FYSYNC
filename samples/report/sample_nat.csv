@@ -1,0 +1,5 @@
+id,scope,status,section,kind,a_ifc,real_ref,real,a_mapped,a_dst,a_inactive,b_nat,b_mapped,proposed_b_mapped,description,detail
+N1,LAN20,match,manual-before,static,inside->outside,WEB1,10.20.0.10/32,198.51.100.10/32,,False,#1 WEB1,203.0.113.10,,,
+N2,LAN20,inactive on B,manual-before,static,inside->outside,WEB2,10.20.0.11/32,198.51.100.11/32,,False,#2 WEB-ONE-RENAMED,203.0.113.11,,web two,B has the NAT but it is inactive
+N4,LAN20,missing,auto,dynamic PAT,inside->outside,RANGE1,"10.20.0.100/30, 10.20.0.104/30, 10.20.0.108/31, 10.20.0.110/32",198.51.100.20/32,,False,,,,,
+N3,LAN20,missing,manual-after,dynamic PAT,inside->outside,LAN20,10.20.0.0/24,interface,,False,,,,,

@@ -1,0 +1,5 @@
+id,scope,status,policy,rule,src_ifc,dst_ifc,src,dst,service,a_rules
+BR1,"A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",also on A,TARGET - Mandatory,Web-443,OUTSIDE,INSIDE,any,WEB-SERVER,tcp eq https,"A2:Web-443 #1, A2:Web-443 ∩ A1:Web-In #7"
+BR2,"A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",over-permitted,,Web-80,OUTSIDE,INSIDE,any,WEB-SERVER,tcp eq www,
+BR3,"A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",also on A,,DC-Out,INSIDE,OUTSIDE,DC-NET,any,ip,"A2:DC-Any #2, A2:DC-Any ∩ A1:DC-Out #8"
+BR4,"A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",over-permitted,,Jump-SSH,OUTSIDE,INSIDE,any,JUMP,tcp eq ssh,

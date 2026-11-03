@@ -1,0 +1,177 @@
+name: ci
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  wheels:
+    name: fetch wheels (all targets, cp310-cp313)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download wheels
+        run: python scripts/fetch_wheels.py --out wheels
+      - name: Build the fwsync wheel
+        run: python -m pip wheel -q --no-deps -w wheels .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: wheels/
+          retention-days: 7
+
+  test:
+    name: tests + selftest (${{ matrix.os }}, Python ${{ matrix.python }})
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14, ubuntu-latest]
+        python: ['3.10', '3.12']
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels
+          path: wheels
+      - name: Test suite
+        run: |
+          python -m pip install -q ".[web,yaml,fmc,test]"
+          python -m pytest -q tests
+      - name: Selftest (offline install into a fresh venv)
+        run: python scripts/selftest.py --root . --venv "$RUNNER_TEMP/st-venv" --wheels wheels --out selftest-result.txt
+      - if: always()
+        run: cat selftest-result.txt || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-${{ matrix.os }}-py${{ matrix.python }}
+          path: selftest-result.txt
+          if-no-files-found: ignore
+
+  build:
+    name: build release zips
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels
+          path: wheels
+      - name: Build both zips from a clean tree
+        run: python scripts/build_release.py --wheels wheels --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 14
+
+  bundle:
+    name: zip selftest (${{ matrix.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            how: bundled python\ via selftest.cmd
+          - os: macos-14
+            how: selftest.command
+          - os: ubuntu-latest
+            how: scripts/selftest.py with the Mac/Linux zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Windows zip, bundled Python (no installed Python used)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist/fwsync-*-windows.zip | Select-Object -First 1
+          $want = (Get-Content "$($zip.FullName).sha256").Split(' ')[0]
+          if ((Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower() -ne $want) { throw 'sha256 mismatch' }
+          Expand-Archive $zip.FullName -DestinationPath x
+          $d = (Get-ChildItem x -Directory | Select-Object -First 1).FullName
+          cmd /c "`"$d\selftest.cmd`""
+          $rc = $LASTEXITCODE
+          Get-Content "$d\selftest-result.txt"
+          Copy-Item "$d\selftest-result.txt" selftest-result.txt
+          exit $rc
+      - uses: actions/setup-python@v5
+        if: runner.os != 'Windows'
+        with:
+          python-version: '3.12'
+      - name: macOS zip, selftest.command
+        if: runner.os == 'macOS'
+        run: |
+          cd dist && shasum -a 256 -c fwsync-*[0-9].zip.sha256 && cd ..
+          unzip -q dist/fwsync-*[0-9].zip -d x
+          d=$(ls -d x/fwsync-*)
+          zsh "$d/packaging/macos/selftest.command"; rc=$?
+          cat "$d/selftest-result.txt"; cp "$d/selftest-result.txt" .
+          exit $rc
+      - name: Linux, Mac/Linux zip
+        if: runner.os == 'Linux'
+        run: |
+          cd dist && sha256sum -c *.sha256 && cd ..
+          unzip -q dist/fwsync-*[0-9].zip -d x
+          d=$(ls -d x/fwsync-*)
+          python "$d/scripts/selftest.py" --root "$d" --venv "$RUNNER_TEMP/st-venv" --wheels "$d/vendor/wheels" --out selftest-result.txt; rc=$?
+          cat selftest-result.txt
+          exit $rc
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zip-selftest-${{ matrix.os }}
+          path: selftest-result.txt
+          if-no-files-found: ignore
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Check the tag matches the version
+        run: |
+          ver=$(python3 -c "import re;print(re.search(r\"__version__ = '([^']+)'\", open('fwsync/__init__.py').read()).group(1))")
+          test "v$ver" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != version $ver"; exit 1; }
+          echo "VER=$ver" >> "$GITHUB_ENV"
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="## $VER " 'index($0, v) == 1 {on=1; next} /^## / && on {exit} on' CHANGELOG.md > notes.md
+          printf '\n\nVerify: compare the sha256 of the zip with the .sha256 file next to it.\n' >> notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.sha256 --title "fwsync $VER" --notes-file notes.md --verify-tag

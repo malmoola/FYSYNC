@@ -1,0 +1,9 @@
+id,scope,side,firewall,subnet,status,nat,section
+P-A-10.0.0.0/29,A1:inside,A,edge.txt + inner.txt,10.0.0.0/29,missing,,
+P-B-10.0.0.0/29,A1:inside,B,target.txt,10.0.0.0/29,missing,,
+P-A-10.50.0.0/16,DC-NET,A,edge.txt + inner.txt,10.50.0.0/16,missing,,
+P-B-10.50.0.0/16,DC-NET,B,target.txt,10.50.0.0/16,covered,#1 WEB-SERVER -> PUB_WEB (line 32); #2 DC-NET -> interface (line 33),manual-before
+P-A-10.60.0.0/16,CAMPUS-NET,A,edge.txt + inner.txt,10.60.0.0/16,covered,#3 CAMPUS-NET -> interface (line 44),manual-after
+P-B-10.60.0.0/16,CAMPUS-NET,B,target.txt,10.60.0.0/16,missing,,
+P-A-10.50.0.0/24,A2:DC-IN,A,edge.txt + inner.txt,10.50.0.0/24,missing,,
+P-B-10.50.0.0/24,A2:DC-IN,B,target.txt,10.50.0.0/24,covered,#2 DC-NET -> interface (line 33),manual-after

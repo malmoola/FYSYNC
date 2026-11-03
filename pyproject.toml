@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fwsync"
+dynamic = ["version"]
+description = "Firewall compare-and-replicate tool (FTD/ASA LINA text or FMC REST snapshots in; HTML/CSV/JSON reports, staged FMC copies out)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Proprietary - internal use"}
+dependencies = []
+
+[project.optional-dependencies]
+web = ["fastapi>=0.110", "uvicorn>=0.27", "python-multipart>=0.0.9"]
+push = ["requests>=2.25"]
+fmc = ["requests>=2.25"]
+yaml = ["PyYAML>=6.0"]
+test = ["pytest>=7", "httpx>=0.24"]
+all = ["fwsync[web,push,fmc,yaml,test]"]
+
+[project.scripts]
+fwsync = "fwsync.cli:main"
+
+[tool.setuptools]
+packages = ["fwsync", "fwsync.adapters"]
+
+[tool.setuptools.dynamic]
+version = {attr = "fwsync.__version__"}

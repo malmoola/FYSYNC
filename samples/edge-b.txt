@@ -1,0 +1,30 @@
+: Saved
+hostname edge-b
+interface GigabitEthernet0/0
+ nameif OUTSIDE
+ ip address 203.0.113.2 255.255.255.0
+interface GigabitEthernet0/1
+ nameif INSIDE
+ ip address 10.10.0.5 255.255.255.0
+object network WEB1
+ host 10.20.0.10
+object network WEB-ONE-RENAMED
+ host 10.20.0.11
+object network LAN20
+ subnet 10.20.0.0 255.255.254.0
+object network B_PUB_WEB1
+ host 203.0.113.10
+object network B_PUB_WEB2
+ host 203.0.113.11
+access-list CSM_FW_ACL_ remark rule-id 200: RULE: Block-8000
+access-list CSM_FW_ACL_ advanced deny tcp ifc INSIDE any ifc OUTSIDE any range 8000 8010 rule-id 200
+access-list CSM_FW_ACL_ remark rule-id 201: RULE: Web-In
+access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE host 10.20.0.10 eq www rule-id 201
+access-list CSM_FW_ACL_ remark rule-id 202: RULE: Lan-Out
+access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE 10.20.0.0 255.255.255.0 ifc OUTSIDE any rule-id 202
+access-list CSM_FW_ACL_ advanced deny ip any any rule-id 9
+access-group CSM_FW_ACL_ global
+nat (INSIDE,OUTSIDE) source static WEB1 B_PUB_WEB1
+nat (INSIDE,OUTSIDE) source static WEB-ONE-RENAMED B_PUB_WEB2 inactive
+route INSIDE 10.20.0.0 255.255.255.0 10.10.0.254 1
+route OUTSIDE 0.0.0.0 0.0.0.0 203.0.113.1 1

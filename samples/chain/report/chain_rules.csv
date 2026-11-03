@@ -1,0 +1,10 @@
+id,path,scope,status,action_check,policy,rule,intersected_with,src_ifc,dst_ifc,b_src_ifc,b_dst_ifc,src,dst,service,direction,detail,b_rules
+R1,A2,"A1:inside, DC-NET, CAMPUS-NET",missing,,A2 DC - Mandatory,A2:Web-443,,A1:inside,A2:DC-IN,INSIDE,INSIDE,"10.0.0.0/29, 10.60.0.0/16",WEB,tcp eq https,from scope + to scope,no B permit,
+R2,A2,"A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",missing,,A2,A2:DC-Any,,A2:DC-IN,A1:inside,INSIDE,INSIDE,DC-NET,"10.0.0.0/29, 10.60.0.0/16",ip,from scope + to scope,no B permit,
+R3,A2,"DC-NET, CAMPUS-NET, A2:DC-IN",missing,,A2,A2:Campus-RDP,,A1:inside,A2:DC-IN,INSIDE,INSIDE,CAMPUS-NET,DC-NET,tcp eq 3389,from scope + to scope,no B permit,
+R4,A2,"A1:inside, DC-NET, CAMPUS-NET",missing,,A2,A2:Mail-In,,A1:inside,A2:DC-IN,INSIDE,INSIDE,"10.0.0.0/29, 10.60.0.0/16",MAIL,tcp eq smtp,from scope + to scope,no B permit,
+R5,A2,"A1:inside, DC-NET, CAMPUS-NET",missing,,A2,A2:App40,,A1:inside,A2:DC-IN,INSIDE,INSIDE,"10.0.0.0/29, 10.60.0.0/16",APP40,tcp eq 8443,from scope + to scope,no B permit,
+R6,A1,CAMPUS-NET,missing,,A1,A1:Campus-Out,,A1:inside,A1:outside,INSIDE,OUTSIDE,CAMPUS-NET,any,ip,from scope,no B permit,
+R7,A2∩A1,DC-NET,covered,action unknown (L7),A2 DC - Mandatory,A2:Web-443,A1:Web-In,A1:outside,A2:DC-IN,OUTSIDE,INSIDE,any,WEB,tcp/443,to scope,,Web-443 #1
+R8,A2∩A1,"DC-NET, A2:DC-IN",covered,,A2,A2:DC-Any,A1:DC-Out,A2:DC-IN,A1:outside,INSIDE,OUTSIDE,DC-NET,any,ip,from scope,,DC-Out #3
+R9,A2∩A1,DC-NET,missing,,A2,A2:App40,A1:Apps-In,A1:outside,A2:DC-IN,OUTSIDE,INSIDE,any,APP40,tcp/8443,to scope,no B permit,

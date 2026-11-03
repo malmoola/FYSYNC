@@ -1,0 +1,7 @@
+id,scope,status,name,b_name,kind,value,b_value_or_names,description
+O-WEB1,LAN20,same,WEB1,WEB1,host,10.20.0.10,,
+O-WEB2,LAN20,"same value, different name",WEB2,WEB2,host,10.20.0.11,WEB-ONE-RENAMED,
+O-LAN20,LAN20,"same name, different value",LAN20,LAN20,subnet,10.20.0.0 255.255.255.0,10.20.0.0/23,
+O-RANGE1,LAN20,missing on B,RANGE1,RANGE1,range,10.20.0.100 10.20.0.110,,
+O-INNER,LAN20,missing on B,INNER,INNER,group,"10.20.0.10/32, 10.20.0.12/32",,
+O-OUTER,LAN20,missing on B,OUTER,OUTER,group,"10.20.0.10/32, 10.20.0.12/32, 10.30.0.0/16",,

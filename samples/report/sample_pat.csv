@@ -1,0 +1,5 @@
+id,scope,side,firewall,subnet,status,nat,section
+P-A-10.10.0.0/24,VLAN 10 inside,A,edge-a.txt,10.10.0.0/24,missing,,
+P-B-10.10.0.0/24,VLAN 10 inside,B,edge-b.txt,10.10.0.0/24,missing,,
+P-A-10.20.0.0/24,LAN20,A,edge-a.txt,10.20.0.0/24,covered,#1 WEB1 -> PUB_WEB1 (line 52); #2 WEB2 -> PUB_WEB2 (line 53); #4 RANGE1 -> PAT_LAN20 (line 56); #3 LAN20 -> interface (line 54),manual-before
+P-B-10.20.0.0/24,LAN20,B,edge-b.txt,10.20.0.0/24,missing,#1 WEB1 -> B_PUB_WEB1 (line 27),manual-before

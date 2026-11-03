@@ -1,0 +1,7 @@
+*.cmd text eol=crlf
+README-FIRST.txt text eol=crlf
+*.command text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+samples/** -text
+tests/** text eol=lf

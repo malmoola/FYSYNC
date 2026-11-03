@@ -1,0 +1,47 @@
+: Saved
+NGFW Version 7.4.0
+hostname chain-edge
+interface Port-channel1
+ nameif outside
+ security-level 0
+ ip address 198.51.100.2 255.255.255.0
+interface Port-channel2
+ nameif inside
+ security-level 0
+ ip address 10.0.0.1 255.255.255.248
+object network DC-NET
+ subnet 10.50.0.0 255.255.0.0
+object network CAMPUS-NET
+ subnet 10.60.0.0 255.255.0.0
+object network WEB
+ host 10.50.1.10
+object network JUMP
+ host 10.50.1.20
+object network PUB_WEB
+ host 198.51.100.10
+object-group service WEBPORTS tcp
+ port-object eq www
+ port-object eq https
+object-group network FMC_INLINE_dst_rule_104
+ network-object 10.50.1.40 255.255.255.255
+ network-object 10.50.1.41 255.255.255.255
+access-list CSM_FW_ACL_ remark rule-id 101: ACCESS POLICY: EDGE - Mandatory
+access-list CSM_FW_ACL_ remark rule-id 101: L7 RULE: Web-In
+access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object WEB object-group WEBPORTS rule-id 101
+access-list CSM_FW_ACL_ remark rule-id 102: RULE: DC-Out
+access-list CSM_FW_ACL_ advanced permit ip ifc inside object DC-NET ifc outside any rule-id 102
+access-list CSM_FW_ACL_ remark rule-id 103: RULE: Campus-Out
+access-list CSM_FW_ACL_ advanced permit ip ifc inside object CAMPUS-NET ifc outside any rule-id 103
+access-list CSM_FW_ACL_ remark rule-id 104: RULE: Jump-In
+access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object JUMP eq ssh rule-id 104
+access-list CSM_FW_ACL_ remark rule-id 105: RULE: Apps-In
+access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object-group FMC_INLINE_dst_rule_104 eq 8443 rule-id 105
+access-list CSM_FW_ACL_ remark rule-id 9: L4 RULE: DEFAULT ACTION RULE
+access-list CSM_FW_ACL_ advanced deny ip any any rule-id 9
+access-group CSM_FW_ACL_ global
+nat (inside,outside) source static WEB PUB_WEB
+nat (inside,outside) after-auto source dynamic DC-NET interface
+nat (inside,outside) after-auto source dynamic CAMPUS-NET interface
+route outside 0.0.0.0 0.0.0.0 198.51.100.1 1
+route inside 10.50.0.0 255.255.0.0 10.0.0.2 1
+route inside 10.60.0.0 255.255.0.0 10.0.0.3 1

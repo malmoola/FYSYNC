@@ -1,0 +1,2532 @@
+{
+ "a": {
+  "name": "edge.txt + inner.txt",
+  "vendor": "lina",
+  "hostname": "chain-edge + chain-inner",
+  "interfaces": 3,
+  "routes": 4,
+  "objects": 8,
+  "service_objects": 1,
+  "rules": 10,
+  "nats": 3,
+  "warnings": 0
+ },
+ "b": {
+  "name": "target.txt",
+  "vendor": "lina",
+  "hostname": "chain-target",
+  "interfaces": 2,
+  "routes": 2,
+  "objects": 4,
+  "service_objects": 0,
+  "rules": 5,
+  "nats": 2,
+  "warnings": 0
+ },
+ "profile": "default",
+ "scope": [
+  "10.0.0.0/29",
+  "10.50.0.0/16",
+  "10.60.0.0/16",
+  "10.50.0.0/24"
+ ],
+ "scope_names": {
+  "10.0.0.0/29": "A1:inside",
+  "10.50.0.0/16": "DC-NET",
+  "10.60.0.0/16": "CAMPUS-NET",
+  "10.50.0.0/24": "A2:DC-IN"
+ },
+ "rules": [
+  {
+   "id": "R1",
+   "path": "A2",
+   "policy": "A2 DC - Mandatory",
+   "rule": "A2:Web-443",
+   "rule_id": "201",
+   "action": "permit",
+   "src_ifc": "A1:inside",
+   "dst_ifc": "A2:DC-IN",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "10.0.0.0/29, 10.60.0.0/16",
+   "dst": "WEB",
+   "service": "tcp eq https",
+   "svc": "tcp/443",
+   "scope": "A1:inside, DC-NET, CAMPUS-NET",
+   "scopes": [
+    "10.0.0.0/29",
+    "10.50.0.0/16",
+    "10.60.0.0/16"
+   ],
+   "scopes_any": [],
+   "direction": "from scope + to scope",
+   "status": "missing",
+   "detail": "no B permit",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object WEB eq https rule-id 201",
+   "intersected_with": "",
+   "key": "rule|A2|A2#1"
+  },
+  {
+   "id": "R2",
+   "path": "A2",
+   "policy": "A2",
+   "rule": "A2:DC-Any",
+   "rule_id": "202",
+   "action": "permit",
+   "src_ifc": "A2:DC-IN",
+   "dst_ifc": "A1:inside",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "DC-NET",
+   "dst": "10.0.0.0/29, 10.60.0.0/16",
+   "service": "ip",
+   "svc": "ip",
+   "scope": "A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",
+   "scopes": [
+    "10.0.0.0/29",
+    "10.50.0.0/16",
+    "10.60.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "scopes_any": [],
+   "direction": "from scope + to scope",
+   "status": "missing",
+   "detail": "no B permit",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit ip ifc DC-IN object DC-NET ifc DC-OUT any rule-id 202",
+   "intersected_with": "",
+   "key": "rule|A2|A2#2"
+  },
+  {
+   "id": "R3",
+   "path": "A2",
+   "policy": "A2",
+   "rule": "A2:Campus-RDP",
+   "rule_id": "203",
+   "action": "permit",
+   "src_ifc": "A1:inside",
+   "dst_ifc": "A2:DC-IN",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "CAMPUS-NET",
+   "dst": "DC-NET",
+   "service": "tcp eq 3389",
+   "svc": "tcp/3389",
+   "scope": "DC-NET, CAMPUS-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16",
+    "10.60.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "scopes_any": [],
+   "direction": "from scope + to scope",
+   "status": "missing",
+   "detail": "no B permit",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT object CAMPUS-NET ifc DC-IN object DC-NET eq 3389 rule-id 203",
+   "intersected_with": "",
+   "key": "rule|A2|A2#3"
+  },
+  {
+   "id": "R4",
+   "path": "A2",
+   "policy": "A2",
+   "rule": "A2:Mail-In",
+   "rule_id": "204",
+   "action": "permit",
+   "src_ifc": "A1:inside",
+   "dst_ifc": "A2:DC-IN",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "10.0.0.0/29, 10.60.0.0/16",
+   "dst": "MAIL",
+   "service": "tcp eq smtp",
+   "svc": "tcp/25",
+   "scope": "A1:inside, DC-NET, CAMPUS-NET",
+   "scopes": [
+    "10.0.0.0/29",
+    "10.50.0.0/16",
+    "10.60.0.0/16"
+   ],
+   "scopes_any": [],
+   "direction": "from scope + to scope",
+   "status": "missing",
+   "detail": "no B permit",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object MAIL eq smtp rule-id 204",
+   "intersected_with": "",
+   "key": "rule|A2|A2#4"
+  },
+  {
+   "id": "R5",
+   "path": "A2",
+   "policy": "A2",
+   "rule": "A2:App40",
+   "rule_id": "205",
+   "action": "permit",
+   "src_ifc": "A1:inside",
+   "dst_ifc": "A2:DC-IN",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "10.0.0.0/29, 10.60.0.0/16",
+   "dst": "APP40",
+   "service": "tcp eq 8443",
+   "svc": "tcp/8443",
+   "scope": "A1:inside, DC-NET, CAMPUS-NET",
+   "scopes": [
+    "10.0.0.0/29",
+    "10.50.0.0/16",
+    "10.60.0.0/16"
+   ],
+   "scopes_any": [],
+   "direction": "from scope + to scope",
+   "status": "missing",
+   "detail": "no B permit",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object APP40 eq 8443 rule-id 205",
+   "intersected_with": "",
+   "key": "rule|A2|A2#5"
+  },
+  {
+   "id": "R6",
+   "path": "A1",
+   "policy": "A1",
+   "rule": "A1:Campus-Out",
+   "rule_id": "103",
+   "action": "permit",
+   "src_ifc": "A1:inside",
+   "dst_ifc": "A1:outside",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "OUTSIDE",
+   "src": "CAMPUS-NET",
+   "dst": "any",
+   "service": "ip",
+   "svc": "ip",
+   "scope": "CAMPUS-NET",
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "scopes_any": [],
+   "direction": "from scope",
+   "status": "missing",
+   "detail": "no B permit",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit ip ifc inside object CAMPUS-NET ifc outside any rule-id 103",
+   "intersected_with": "",
+   "key": "rule|A1|A1#3"
+  },
+  {
+   "id": "R7",
+   "path": "A2\u2229A1",
+   "policy": "A2 DC - Mandatory",
+   "rule": "A2:Web-443",
+   "rule_id": "201",
+   "action": "permit",
+   "src_ifc": "A1:outside",
+   "dst_ifc": "A2:DC-IN",
+   "b_src_ifc": "OUTSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "any",
+   "dst": "WEB",
+   "service": "tcp/443",
+   "svc": "tcp/443",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "scopes_any": [],
+   "direction": "to scope",
+   "status": "covered",
+   "detail": "",
+   "l7": true,
+   "action_check": "action unknown (L7)",
+   "b_rules": [
+    "Web-443 #1"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object WEB eq https rule-id 201 | A2\u2229A1",
+   "intersected_with": "A1:Web-In",
+   "key": "rule|A2\u2229A1|A2#1"
+  },
+  {
+   "id": "R8",
+   "path": "A2\u2229A1",
+   "policy": "A2",
+   "rule": "A2:DC-Any",
+   "rule_id": "202",
+   "action": "permit",
+   "src_ifc": "A2:DC-IN",
+   "dst_ifc": "A1:outside",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "OUTSIDE",
+   "src": "DC-NET",
+   "dst": "any",
+   "service": "ip",
+   "svc": "ip",
+   "scope": "DC-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "scopes_any": [],
+   "direction": "from scope",
+   "status": "covered",
+   "detail": "",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [
+    "DC-Out #3"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit ip ifc DC-IN object DC-NET ifc DC-OUT any rule-id 202 | A2\u2229A1",
+   "intersected_with": "A1:DC-Out",
+   "key": "rule|A2\u2229A1|A2#2"
+  },
+  {
+   "id": "R9",
+   "path": "A2\u2229A1",
+   "policy": "A2",
+   "rule": "A2:App40",
+   "rule_id": "205",
+   "action": "permit",
+   "src_ifc": "A1:outside",
+   "dst_ifc": "A2:DC-IN",
+   "b_src_ifc": "OUTSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "any",
+   "dst": "APP40",
+   "service": "tcp/8443",
+   "svc": "tcp/8443",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "scopes_any": [],
+   "direction": "to scope",
+   "status": "missing",
+   "detail": "no B permit",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object APP40 eq 8443 rule-id 205 | A2\u2229A1",
+   "intersected_with": "A1:Apps-In",
+   "key": "rule|A2\u2229A1|A2#5"
+  }
+ ],
+ "nat": [
+  {
+   "id": "N1",
+   "section": "manual-before",
+   "kind": "static",
+   "a_ifc": "A1:inside->A1:outside",
+   "real_ref": "WEB",
+   "real": "10.50.1.10/32",
+   "a_mapped": "198.51.100.10/32",
+   "a_dst": "",
+   "a_inactive": false,
+   "description": "",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "line": "nat (inside,outside) source static WEB PUB_WEB",
+   "outbound_only": false,
+   "status": "match",
+   "b_nat": "#1 WEB-SERVER",
+   "b_mapped": "203.0.113.10",
+   "detail": "",
+   "key": "nat|90f54bf6a3a8"
+  },
+  {
+   "id": "N2",
+   "section": "manual-after",
+   "kind": "dynamic PAT",
+   "a_ifc": "A1:inside->A1:outside",
+   "real_ref": "DC-NET",
+   "real": "10.50.0.0/16",
+   "a_mapped": "interface",
+   "a_dst": "",
+   "a_inactive": false,
+   "description": "",
+   "scope": "DC-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "line": "nat (inside,outside) after-auto source dynamic DC-NET interface",
+   "status": "match",
+   "b_nat": "#2 DC-NET",
+   "b_mapped": "interface",
+   "detail": "",
+   "key": "nat|5b81b8dc6e17"
+  },
+  {
+   "id": "N3",
+   "section": "manual-after",
+   "kind": "dynamic PAT",
+   "a_ifc": "A1:inside->A1:outside",
+   "real_ref": "CAMPUS-NET",
+   "real": "10.60.0.0/16",
+   "a_mapped": "interface",
+   "a_dst": "",
+   "a_inactive": false,
+   "description": "",
+   "scope": "CAMPUS-NET",
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "line": "nat (inside,outside) after-auto source dynamic CAMPUS-NET interface",
+   "status": "missing",
+   "b_nat": "",
+   "b_mapped": "",
+   "detail": "",
+   "key": "nat|0a85b1ffda4e"
+  }
+ ],
+ "pat": [
+  {
+   "id": "P-A-10.0.0.0/29",
+   "side": "A",
+   "firewall": "edge.txt + inner.txt",
+   "subnet": "10.0.0.0/29",
+   "scope": "A1:inside",
+   "scopes": [
+    "10.0.0.0/29"
+   ],
+   "status": "missing",
+   "nat": "",
+   "section": "",
+   "out_ifc": "A1:outside",
+   "key": "pat|P-A-10.0.0.0/29"
+  },
+  {
+   "id": "P-B-10.0.0.0/29",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.0.0.0/29",
+   "scope": "A1:inside",
+   "scopes": [
+    "10.0.0.0/29"
+   ],
+   "status": "missing",
+   "nat": "",
+   "section": "",
+   "out_ifc": "OUTSIDE",
+   "key": "pat|P-B-10.0.0.0/29"
+  },
+  {
+   "id": "P-A-10.50.0.0/16",
+   "side": "A",
+   "firewall": "edge.txt + inner.txt",
+   "subnet": "10.50.0.0/16",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "status": "missing",
+   "nat": "",
+   "section": "",
+   "out_ifc": "A1:outside",
+   "key": "pat|P-A-10.50.0.0/16"
+  },
+  {
+   "id": "P-B-10.50.0.0/16",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.50.0.0/16",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "status": "covered",
+   "nat": "#1 WEB-SERVER -> PUB_WEB (line 32); #2 DC-NET -> interface (line 33)",
+   "section": "manual-before",
+   "out_ifc": "OUTSIDE",
+   "key": "pat|P-B-10.50.0.0/16"
+  },
+  {
+   "id": "P-A-10.60.0.0/16",
+   "side": "A",
+   "firewall": "edge.txt + inner.txt",
+   "subnet": "10.60.0.0/16",
+   "scope": "CAMPUS-NET",
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "status": "covered",
+   "nat": "#3 CAMPUS-NET -> interface (line 44)",
+   "section": "manual-after",
+   "out_ifc": "A1:outside",
+   "key": "pat|P-A-10.60.0.0/16"
+  },
+  {
+   "id": "P-B-10.60.0.0/16",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.60.0.0/16",
+   "scope": "CAMPUS-NET",
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "status": "missing",
+   "nat": "",
+   "section": "",
+   "out_ifc": "OUTSIDE",
+   "key": "pat|P-B-10.60.0.0/16"
+  },
+  {
+   "id": "P-A-10.50.0.0/24",
+   "side": "A",
+   "firewall": "edge.txt + inner.txt",
+   "subnet": "10.50.0.0/24",
+   "scope": "A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/24"
+   ],
+   "status": "missing",
+   "nat": "",
+   "section": "",
+   "out_ifc": "A1:outside",
+   "key": "pat|P-A-10.50.0.0/24"
+  },
+  {
+   "id": "P-B-10.50.0.0/24",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.50.0.0/24",
+   "scope": "A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/24"
+   ],
+   "status": "covered",
+   "nat": "#2 DC-NET -> interface (line 33)",
+   "section": "manual-after",
+   "out_ifc": "OUTSIDE",
+   "key": "pat|P-B-10.50.0.0/24"
+  }
+ ],
+ "pat_detail": [
+  {
+   "id": "PD-A-none-10.0.0.0/29",
+   "side": "A",
+   "firewall": "edge.txt + inner.txt",
+   "subnet": "10.0.0.0/29",
+   "scope": "A1:inside",
+   "addresses": "10.0.0.0/29",
+   "count": 8,
+   "status": "not translated",
+   "object": "",
+   "mapped": "",
+   "section": "",
+   "line": ""
+  },
+  {
+   "id": "PD-B-none-10.0.0.0/29",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.0.0.0/29",
+   "scope": "A1:inside",
+   "addresses": "10.0.0.0/29",
+   "count": 8,
+   "status": "not translated",
+   "object": "",
+   "mapped": "",
+   "section": "",
+   "line": ""
+  },
+  {
+   "id": "PD-A-none-10.50.0.0/16",
+   "side": "A",
+   "firewall": "edge.txt + inner.txt",
+   "subnet": "10.50.0.0/16",
+   "scope": "DC-NET",
+   "addresses": "10.50.0.0/16",
+   "count": 65536,
+   "status": "not translated",
+   "object": "",
+   "mapped": "",
+   "section": "",
+   "line": ""
+  },
+  {
+   "id": "PD-B-1-10.50.0.0/16",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.50.0.0/16",
+   "scope": "DC-NET",
+   "addresses": "10.50.1.10/32",
+   "count": 1,
+   "status": "translated",
+   "kind": "1:1",
+   "object": "WEB-SERVER",
+   "mapped": "PUB_WEB",
+   "section": "manual-before",
+   "line": 32,
+   "order": 1
+  },
+  {
+   "id": "PD-B-2-10.50.0.0/16",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.50.0.0/16",
+   "scope": "DC-NET",
+   "addresses": "10.50.0.0/24, 10.50.1.0/29, 10.50.1.8/31, 10.50.1.11/32, 10.50.1.12/30, 10.50.1.16/28 ...(+10)",
+   "count": 65535,
+   "status": "translated",
+   "kind": "shared",
+   "object": "DC-NET",
+   "mapped": "interface",
+   "section": "manual-after",
+   "line": 33,
+   "order": 2
+  },
+  {
+   "id": "PD-A-3-10.60.0.0/16",
+   "side": "A",
+   "firewall": "edge.txt + inner.txt",
+   "subnet": "10.60.0.0/16",
+   "scope": "CAMPUS-NET",
+   "addresses": "10.60.0.0/16",
+   "count": 65536,
+   "status": "translated",
+   "kind": "shared",
+   "object": "CAMPUS-NET",
+   "mapped": "interface",
+   "section": "manual-after",
+   "line": 44,
+   "order": 3
+  },
+  {
+   "id": "PD-B-none-10.60.0.0/16",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.60.0.0/16",
+   "scope": "CAMPUS-NET",
+   "addresses": "10.60.0.0/16",
+   "count": 65536,
+   "status": "not translated",
+   "object": "",
+   "mapped": "",
+   "section": "",
+   "line": ""
+  },
+  {
+   "id": "PD-A-none-10.50.0.0/24",
+   "side": "A",
+   "firewall": "edge.txt + inner.txt",
+   "subnet": "10.50.0.0/24",
+   "scope": "A2:DC-IN",
+   "addresses": "10.50.0.0/24",
+   "count": 256,
+   "status": "not translated",
+   "object": "",
+   "mapped": "",
+   "section": "",
+   "line": ""
+  },
+  {
+   "id": "PD-B-2-10.50.0.0/24",
+   "side": "B",
+   "firewall": "target.txt",
+   "subnet": "10.50.0.0/24",
+   "scope": "A2:DC-IN",
+   "addresses": "10.50.0.0/24",
+   "count": 256,
+   "status": "translated",
+   "kind": "shared",
+   "object": "DC-NET",
+   "mapped": "interface",
+   "section": "manual-after",
+   "line": 33,
+   "order": 2
+  }
+ ],
+ "public": [
+  {
+   "id": "PUB-10.50.0.0/16",
+   "scope": "DC-NET",
+   "subnet": "10.50.0.0/16",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "a_static_active": 1,
+   "b_missing": 0,
+   "b_inactive": 0,
+   "b_public_needed": 0,
+   "b_public_new": 0,
+   "pub_a": 0,
+   "pub_b": 0,
+   "pub_b_nats": 0,
+   "pub_b_hosts": [],
+   "status": "ok",
+   "key": "public|PUB-10.50.0.0/16"
+  },
+  {
+   "id": "PUB-TOTAL",
+   "scope": "total",
+   "subnet": "203.0.113.0/24",
+   "a_static_active": "",
+   "b_missing": 0,
+   "b_inactive": 0,
+   "b_public_needed": 0,
+   "b_public_new": 0,
+   "b_public_available": 251,
+   "status": "ok (B ranges assumed from config)",
+   "key": "public|PUB-TOTAL"
+  },
+  {
+   "id": "PUB-B-203.0.113.0/24",
+   "scope": "B used",
+   "subnet": "203.0.113.0/24",
+   "a_static_active": "",
+   "b_missing": "",
+   "b_inactive": "",
+   "b_public_needed": "",
+   "b_public_new": "",
+   "status": "1 used: 203.0.113.10",
+   "key": "public|PUB-B-203.0.113.0/24"
+  }
+ ],
+ "inbound": [
+  {
+   "id": "I1",
+   "object": "WEB",
+   "real": "10.50.1.10/32",
+   "a_public": "198.51.100.10",
+   "b_public": "203.0.113.10",
+   "ports": "tcp/443",
+   "a_rules": "A2:Web-443 \u2229 A1:Web-In",
+   "b_rules": "Web-443",
+   "status": "ready",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "nat_id": "N1",
+   "nat_status": "match",
+   "rule_status": "covered",
+   "description": "",
+   "key": "inbound|WEB"
+  }
+ ],
+ "dns": [
+  {
+   "host": "WEB",
+   "description": "",
+   "real_ip": "10.50.1.10/32",
+   "a_public_ip": "198.51.100.10",
+   "b_public_ip": "203.0.113.10",
+   "b_status": "match",
+   "ports": "tcp/443",
+   "scope": "DC-NET",
+   "key": "dns|WEB"
+  }
+ ],
+ "routing": [
+  {
+   "id": "RT-10.0.0.0/29",
+   "scope": "A1:inside",
+   "scopes": [
+    "10.0.0.0/29"
+   ],
+   "subnet": "10.0.0.0/29",
+   "a_ifc": "A1:inside",
+   "a_role": "inside",
+   "expected_b_ifc": "INSIDE",
+   "b_route": "10.0.0.0/29 via OUTSIDE (wrong way)",
+   "b_next_hop": "0.0.0.0/0 203.0.113.1",
+   "status": "wrong way",
+   "detail": "",
+   "key": "routing|10.0.0.0/29"
+  },
+  {
+   "id": "RT-10.50.0.0/16",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "subnet": "10.50.0.0/16",
+   "a_ifc": "A2:DC-IN",
+   "a_role": "inside",
+   "expected_b_ifc": "INSIDE",
+   "b_route": "10.50.0.0/16 via INSIDE (ok)",
+   "b_next_hop": "10.50.0.0/16 10.9.0.2",
+   "status": "ok",
+   "detail": "",
+   "key": "routing|10.50.0.0/16"
+  },
+  {
+   "id": "RT-10.60.0.0/16",
+   "scope": "CAMPUS-NET",
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "subnet": "10.60.0.0/16",
+   "a_ifc": "A1:inside",
+   "a_role": "inside",
+   "expected_b_ifc": "INSIDE",
+   "b_route": "10.60.0.0/16 via OUTSIDE (wrong way)",
+   "b_next_hop": "0.0.0.0/0 203.0.113.1",
+   "status": "wrong way",
+   "detail": "",
+   "key": "routing|10.60.0.0/16"
+  },
+  {
+   "id": "RT-10.50.0.0/24",
+   "scope": "A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/24"
+   ],
+   "subnet": "10.50.0.0/24",
+   "a_ifc": "A2:DC-IN",
+   "a_role": "inside",
+   "expected_b_ifc": "INSIDE",
+   "b_route": "10.50.0.0/24 via INSIDE (ok)",
+   "b_next_hop": "10.50.0.0/16 10.9.0.2",
+   "status": "ok",
+   "detail": "",
+   "key": "routing|10.50.0.0/24"
+  }
+ ],
+ "objects": [
+  {
+   "id": "O-DC-NET",
+   "name": "DC-NET",
+   "b_name": "DC-NET",
+   "kind": "subnet",
+   "value": "10.50.0.0 255.255.0.0",
+   "addrs": "10.50.0.0/16",
+   "status": "same",
+   "b_value_or_names": "",
+   "scope": "DC-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "description": "",
+   "key": "objects|DC-NET"
+  },
+  {
+   "id": "O-CAMPUS-NET",
+   "name": "CAMPUS-NET",
+   "b_name": "CAMPUS-NET",
+   "kind": "subnet",
+   "value": "10.60.0.0 255.255.0.0",
+   "addrs": "10.60.0.0/16",
+   "status": "missing on B",
+   "b_value_or_names": "",
+   "scope": "CAMPUS-NET",
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "description": "",
+   "key": "objects|CAMPUS-NET"
+  },
+  {
+   "id": "O-WEB",
+   "name": "WEB",
+   "b_name": "WEB",
+   "kind": "host",
+   "value": "10.50.1.10",
+   "addrs": "10.50.1.10/32",
+   "status": "same value, different name",
+   "b_value_or_names": "WEB-SERVER",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "description": "",
+   "key": "objects|WEB"
+  },
+  {
+   "id": "O-JUMP",
+   "name": "JUMP",
+   "b_name": "JUMP",
+   "kind": "host",
+   "value": "10.50.1.20",
+   "addrs": "10.50.1.20/32",
+   "status": "same",
+   "b_value_or_names": "",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "description": "",
+   "key": "objects|JUMP"
+  },
+  {
+   "id": "O-MAIL",
+   "name": "MAIL",
+   "b_name": "MAIL",
+   "kind": "host",
+   "value": "10.50.1.30",
+   "addrs": "10.50.1.30/32",
+   "status": "missing on B",
+   "b_value_or_names": "",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "description": "",
+   "key": "objects|MAIL"
+  },
+  {
+   "id": "O-APP40",
+   "name": "APP40",
+   "b_name": "APP40",
+   "kind": "host",
+   "value": "10.50.1.40",
+   "addrs": "10.50.1.40/32",
+   "status": "missing on B",
+   "b_value_or_names": "",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "description": "",
+   "key": "objects|APP40"
+  }
+ ],
+ "b_rules": [
+  {
+   "id": "BR1",
+   "policy": "TARGET - Mandatory",
+   "rule": "Web-443",
+   "rule_id": "301",
+   "src_ifc": "OUTSIDE",
+   "dst_ifc": "INSIDE",
+   "src": "any",
+   "dst": "WEB-SERVER",
+   "service": "tcp eq https",
+   "scope": "A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "scopes_any": [
+    "10.0.0.0/29",
+    "10.60.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "status": "also on A",
+   "a_rules": [
+    "A2:Web-443 #1",
+    "A2:Web-443 \u2229 A1:Web-In #7"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB-SERVER eq https rule-id 301",
+   "key": "b_rules|59beeb7d2339"
+  },
+  {
+   "id": "BR2",
+   "policy": "",
+   "rule": "Web-80",
+   "rule_id": "302",
+   "src_ifc": "OUTSIDE",
+   "dst_ifc": "INSIDE",
+   "src": "any",
+   "dst": "WEB-SERVER",
+   "service": "tcp eq www",
+   "scope": "A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "scopes_any": [
+    "10.0.0.0/29",
+    "10.60.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "status": "over-permitted",
+   "a_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB-SERVER eq www rule-id 302",
+   "key": "b_rules|a0ea6c5f2ea4"
+  },
+  {
+   "id": "BR3",
+   "policy": "",
+   "rule": "DC-Out",
+   "rule_id": "303",
+   "src_ifc": "INSIDE",
+   "dst_ifc": "OUTSIDE",
+   "src": "DC-NET",
+   "dst": "any",
+   "service": "ip",
+   "scope": "A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "scopes_any": [
+    "10.0.0.0/29",
+    "10.60.0.0/16"
+   ],
+   "status": "also on A",
+   "a_rules": [
+    "A2:DC-Any #2",
+    "A2:DC-Any \u2229 A1:DC-Out #8"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE object DC-NET ifc OUTSIDE any rule-id 303",
+   "key": "b_rules|3fd7630ba232"
+  },
+  {
+   "id": "BR4",
+   "policy": "",
+   "rule": "Jump-SSH",
+   "rule_id": "304",
+   "src_ifc": "OUTSIDE",
+   "dst_ifc": "INSIDE",
+   "src": "any",
+   "dst": "JUMP",
+   "service": "tcp eq ssh",
+   "scope": "A1:inside, DC-NET, CAMPUS-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "scopes_any": [
+    "10.0.0.0/29",
+    "10.60.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "status": "over-permitted",
+   "a_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object JUMP eq ssh rule-id 304",
+   "key": "b_rules|4f7eae882e22"
+  }
+ ],
+ "b_nat": [
+  {
+   "id": "BN1",
+   "kind": "static",
+   "b_ifc": "INSIDE->OUTSIDE",
+   "real_ref": "WEB-SERVER",
+   "real": "10.50.1.10/32",
+   "b_mapped": "203.0.113.10/32",
+   "b_inactive": false,
+   "status": "also on A (other public IP)",
+   "a_nat": "#1 WEB",
+   "scope": "DC-NET",
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "line": "nat (INSIDE,OUTSIDE) source static WEB-SERVER PUB_WEB",
+   "key": "b_nat|05194e10b01f"
+  },
+  {
+   "id": "BN2",
+   "kind": "dynamic PAT",
+   "b_ifc": "INSIDE->OUTSIDE",
+   "real_ref": "DC-NET",
+   "real": "10.50.0.0/16",
+   "b_mapped": "interface",
+   "b_inactive": false,
+   "status": "also on A",
+   "a_nat": "#2 DC-NET",
+   "scope": "DC-NET, A2:DC-IN",
+   "scopes": [
+    "10.50.0.0/16",
+    "10.50.0.0/24"
+   ],
+   "line": "nat (INSIDE,OUTSIDE) after-auto source dynamic DC-NET interface",
+   "key": "b_nat|97a33d247cda"
+  }
+ ],
+ "b_objects": [],
+ "held_rules": [],
+ "counts": {
+  "rules": {
+   "missing": 7,
+   "covered": 2
+  },
+  "nat": {
+   "match": 2,
+   "missing": 1
+  },
+  "pat": {
+   "A missing": 3,
+   "B missing": 2,
+   "B covered": 2,
+   "A covered": 1
+  },
+  "inbound": {
+   "ready": 1
+  },
+  "routing": {
+   "wrong way": 2,
+   "ok": 2
+  },
+  "objects": {
+   "same": 2,
+   "missing on B": 3,
+   "same value, different name": 1
+  },
+  "b_rules": {
+   "also on A": 2,
+   "over-permitted": 2
+  },
+  "b_nat": {
+   "also on A (other public IP)": 1,
+   "also on A": 1
+  },
+  "b_objects": {},
+  "held_rules": {},
+  "l7_actions": {
+   "action unknown (L7)": 1
+  }
+ },
+ "summary": [
+  {
+   "subnet": "10.0.0.0/29",
+   "scope": "A1:inside",
+   "rules": {
+    "missing": 4
+   },
+   "pat": {
+    "A missing": 1,
+    "B missing": 1
+   },
+   "routing": {
+    "wrong way": 1
+   },
+   "b_rules_any": {
+    "also on A": 2,
+    "over-permitted": 2
+   }
+  },
+  {
+   "subnet": "10.50.0.0/16",
+   "scope": "DC-NET",
+   "rules": {
+    "missing": 6,
+    "covered": 2
+   },
+   "nat": {
+    "match": 2
+   },
+   "pat": {
+    "A missing": 1,
+    "B covered": 1
+   },
+   "inbound": {
+    "ready": 1
+   },
+   "routing": {
+    "ok": 1
+   },
+   "objects": {
+    "same": 2,
+    "same value, different name": 1,
+    "missing on B": 2
+   },
+   "b_rules": {
+    "also on A": 2,
+    "over-permitted": 2
+   },
+   "b_nat": {
+    "also on A (other public IP)": 1,
+    "also on A": 1
+   }
+  },
+  {
+   "subnet": "10.60.0.0/16",
+   "scope": "CAMPUS-NET",
+   "rules": {
+    "missing": 6
+   },
+   "nat": {
+    "missing": 1
+   },
+   "pat": {
+    "A covered": 1,
+    "B missing": 1
+   },
+   "routing": {
+    "wrong way": 1
+   },
+   "objects": {
+    "missing on B": 1
+   },
+   "b_rules_any": {
+    "also on A": 2,
+    "over-permitted": 2
+   }
+  },
+  {
+   "subnet": "10.50.0.0/24",
+   "scope": "A2:DC-IN",
+   "rules": {
+    "missing": 2,
+    "covered": 1
+   },
+   "nat": {
+    "match": 1
+   },
+   "pat": {
+    "A missing": 1,
+    "B covered": 1
+   },
+   "routing": {
+    "ok": 1
+   },
+   "objects": {
+    "same": 1
+   },
+   "b_rules_any": {
+    "also on A": 1,
+    "over-permitted": 2
+   },
+   "b_rules": {
+    "also on A": 1
+   },
+   "b_nat": {
+    "also on A": 1
+   }
+  }
+ ],
+ "planned": [],
+ "mode": "2:1",
+ "detected": {
+  "roles_a": {
+   "A1:outside": [
+    "outside",
+    "default route"
+   ],
+   "A1:inside": [
+    "inside",
+    "no default route, no public NAT"
+   ],
+   "A2:DC-IN": [
+    "inside",
+    "no default route, no public NAT"
+   ]
+  },
+  "roles_b": {
+   "OUTSIDE": [
+    "outside",
+    "default route"
+   ],
+   "INSIDE": [
+    "inside",
+    "no default route, no public NAT"
+   ]
+  },
+  "interface_map": [
+   {
+    "a": "A1:outside",
+    "a_role": "outside",
+    "a_reason": "default route",
+    "b": "OUTSIDE",
+    "b_role": "outside",
+    "how": "role",
+    "flag": "",
+    "note": ""
+   },
+   {
+    "a": "A1:inside",
+    "a_role": "inside",
+    "a_reason": "no default route, no public NAT",
+    "b": "INSIDE",
+    "b_role": "inside",
+    "how": "role",
+    "flag": "",
+    "note": "merged: A1:inside, A2:DC-IN all map to INSIDE"
+   },
+   {
+    "a": "A2:DC-IN",
+    "a_role": "inside",
+    "a_reason": "no default route, no public NAT",
+    "b": "INSIDE",
+    "b_role": "inside",
+    "how": "role",
+    "flag": "",
+    "note": "merged: A1:inside, A2:DC-IN all map to INSIDE"
+   },
+   {
+    "a": "A1:inside",
+    "a_role": "chain link",
+    "b": "",
+    "a_reason": "link between A1 and A2",
+    "how": "chain",
+    "flag": "",
+    "note": "internal to the chain, not mapped to B"
+   },
+   {
+    "a": "A2:DC-OUT",
+    "a_role": "chain link",
+    "b": "",
+    "a_reason": "link between A1 and A2",
+    "how": "chain",
+    "flag": "",
+    "note": "internal to the chain, not mapped to B"
+   }
+  ],
+  "public_a": {
+   "interfaces": [
+    "198.51.100.0/24"
+   ],
+   "mapped": [
+    "198.51.100.10/32"
+   ],
+   "mapped_count": 1,
+   "ranges": [
+    "198.51.100.0/24"
+   ]
+  },
+  "public_b": {
+   "interfaces": [
+    "203.0.113.0/24"
+   ],
+   "mapped": [
+    "203.0.113.10/32"
+   ],
+   "mapped_count": 1,
+   "ranges": [
+    "203.0.113.0/24"
+   ]
+  },
+  "site_type": "standard",
+  "scope_candidates": [
+   {
+    "subnet": "10.0.0.0/29",
+    "ifc": "A1:inside",
+    "kind": "connected",
+    "name": "A1:inside"
+   },
+   {
+    "subnet": "10.50.0.0/16",
+    "ifc": "A1:inside",
+    "kind": "static",
+    "name": "DC-NET"
+   },
+   {
+    "subnet": "10.60.0.0/16",
+    "ifc": "A1:inside",
+    "kind": "static",
+    "name": "CAMPUS-NET"
+   },
+   {
+    "subnet": "10.50.0.0/24",
+    "ifc": "A2:DC-IN",
+    "kind": "connected",
+    "name": "A2:DC-IN"
+   }
+  ],
+  "dynamic_routing_b": [],
+  "dynamic_routing_a": [],
+  "mode": "2:1",
+  "chain": {
+   "edge": "edge.txt",
+   "inner": "inner.txt",
+   "a1_toward_a2": "inside",
+   "a2_uplink": "DC-OUT",
+   "regions": {
+    "I chained (both)": "10.50.0.0/16",
+    "J A2 only": "-",
+    "R A1 inside (campus)": "10.0.0.0/29, 10.60.0.0/16",
+    "N outside (internet)": "0.0.0.0/5, 8.0.0.0/7, 10.0.0.8/29, 10.0.0.16/28, 10.0.0.32/27, 10.0.0.64/26 ...(+29)"
+   },
+   "paths": [
+    {
+     "subnets": "10.50.0.0/16",
+     "a2_ifc": "DC-IN",
+     "a1_ifc": "inside",
+     "chained": "10.50.0.0/16",
+     "path": "internet -> A1:outside (outside) -> A1:inside -> A2:DC-OUT -> A2:DC-IN"
+    }
+   ],
+   "chain_rules": 3,
+   "rules": 10,
+   "note": ""
+  },
+  "prefixes": [
+   {
+    "prefix": "10.0.0.0/29",
+    "where": "A1 connected inside",
+    "ifc": "A1:inside"
+   },
+   {
+    "prefix": "198.51.100.0/24",
+    "where": "A1 connected outside",
+    "ifc": "A1:outside"
+   },
+   {
+    "prefix": "10.50.0.0/16",
+    "where": "A1 static inside",
+    "ifc": "A1:inside"
+   },
+   {
+    "prefix": "10.60.0.0/16",
+    "where": "A1 static inside",
+    "ifc": "A1:inside"
+   },
+   {
+    "prefix": "10.0.0.0/29",
+    "where": "A2 connected DC-OUT",
+    "ifc": "A2:DC-OUT"
+   },
+   {
+    "prefix": "10.50.0.0/24",
+    "where": "A2 connected DC-IN",
+    "ifc": "A2:DC-IN"
+   },
+   {
+    "prefix": "10.50.0.0/16",
+    "where": "A2 static DC-IN",
+    "ifc": "A2:DC-IN"
+   },
+   {
+    "prefix": "10.9.0.0/29",
+    "where": "B connected INSIDE",
+    "ifc": "INSIDE"
+   },
+   {
+    "prefix": "203.0.113.0/24",
+    "where": "B connected OUTSIDE",
+    "ifc": "OUTSIDE"
+   },
+   {
+    "prefix": "10.50.0.0/16",
+    "where": "B static INSIDE",
+    "ifc": "INSIDE"
+   }
+  ],
+  "scope_warnings": [
+   {
+    "prefix": "10.50.0.0/16",
+    "other": "10.50.0.0/24",
+    "where": "A2 connected DC-IN",
+    "suggest": "10.50.0.0/24",
+    "message": "10.50.0.0/24 is A2 connected DC-IN; scope has 10.50.0.0/16"
+   }
+  ]
+ },
+ "profile_used": {
+  "name": "default",
+  "type": "standard",
+  "scope": [
+   "10.0.0.0/29",
+   "10.50.0.0/16",
+   "10.60.0.0/16",
+   "10.50.0.0/24"
+  ],
+  "scope_names": {
+   "10.0.0.0/29": "A1:inside",
+   "10.50.0.0/16": "DC-NET",
+   "10.60.0.0/16": "CAMPUS-NET",
+   "10.50.0.0/24": "A2:DC-IN"
+  },
+  "interface_map": {
+   "A1:outside": "OUTSIDE",
+   "A1:inside": "INSIDE",
+   "A2:DC-IN": "INSIDE"
+  },
+  "outside_a": [
+   "A1:outside"
+  ],
+  "outside_b": [
+   "OUTSIDE"
+  ],
+  "public_a": [
+   "198.51.100.0/24"
+  ],
+  "public_b": [
+   "203.0.113.0/24"
+  ],
+  "public_map": {},
+  "public_pool_b": [],
+  "rename": [],
+  "zone_map": {},
+  "fmc": {},
+  "scope_add": {},
+  "roles_a": {},
+  "whatif": {},
+  "rule_actions": {},
+  "l7_suspect": "(?i)\\b(block|blocklist|blocked|deny|drop|unwanted)\\b|trojan|stratum miner",
+  "row_state": {},
+  "names": {},
+  "finding_state": {},
+  "decision_state": {}
+ },
+ "warnings": [
+  [],
+  []
+ ],
+ "names": {
+  "A1": "Edge (edge)",
+  "A2": "DC firewall (inner)",
+  "A": "Edge + DC firewall",
+  "B": "chain-target",
+  "A_short": "Edge + DC firewall",
+  "B_short": "chain-target"
+ },
+ "folded_rules": [],
+ "glossary": {
+  "covered": "chain-target permits all of this traffic.",
+  "partial": "chain-target permits only part of this traffic (some addresses or ports are missing).",
+  "shadowed": "An earlier chain-target rule blocks this traffic before a permit is reached.",
+  "denied": "chain-target has a rule that blocks this traffic.",
+  "missing": "chain-target has no rule for this traffic; its default action drops it.",
+  "wrong way": "chain-target would send this subnet to the internet, not inside.",
+  "no route on B": "chain-target has no route for this subnet.",
+  "other inside interface": "chain-target routes this subnet inside, but out of a different inside interface.",
+  "ok": "Ready.",
+  "over-permitted": "chain-target allows more than Edge + DC firewall.",
+  "over-permitted (partial)": "chain-target allows part of this traffic that Edge + DC firewall does not.",
+  "also on A": "Edge + DC firewall allows this traffic too.",
+  "inactive on B": "chain-target has the NAT but it is disabled.",
+  "match": "chain-target has the same NAT.",
+  "mapped conflict": "The public IP is already used by a different inside host on chain-target.",
+  "mapped reuse": "chain-target uses the same public IP as Edge + DC firewall (only valid when both share the public subnet).",
+  "mapped outside B public": "chain-target's NAT uses a public IP outside chain-target's public ranges.",
+  "differs": "chain-target has a NAT for this host, but with different addresses.",
+  "action unknown (L7)": "The rule has application/URL/user conditions; its real action (allow or block) is only in FMC.",
+  "blocked (L7)": "Marked as a block rule: left out of the compare and the plan.",
+  "B only": "Only chain-target has this.",
+  "same name, different value": "The object exists on both, with different addresses."
+ },
+ "findings": [
+  {
+   "id": "F-ce4140602b06",
+   "key": "ce4140602b06",
+   "category": "routing",
+   "order": 0,
+   "scopes": [
+    "10.0.0.0/29"
+   ],
+   "scope": "A1:inside",
+   "what": "chain-target would send 10.0.0.0/29 (A1:inside) to the internet, not inside: it has no route for it and uses its default route.",
+   "why": "Return traffic for A1:inside would leave chain-target toward the internet, so sessions to and from this VLAN fail when chain-target takes over.",
+   "evidence": [
+    {
+     "device": "chain-target",
+     "line": 34,
+     "text": "route OUTSIDE 0.0.0.0 0.0.0.0 203.0.113.1 1"
+    },
+    {
+     "device": "Edge + DC firewall",
+     "line": 0,
+     "text": "connected 10.0.0.0/29 (A1:inside)"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Devices > Device Management > chain-target > Routing > Static Route > Add Route: Interface INSIDE, Available Network NET_10.0.0.0_29, Gateway 10.9.0.2, Metric 1."
+    ],
+    "cli": [
+     "route INSIDE 10.0.0.0 255.255.255.248 10.9.0.2 1"
+    ],
+    "objects": [
+     {
+      "name": "NET_10.0.0.0_29",
+      "type": "Network",
+      "value": "10.0.0.0/29",
+      "cli": [
+       "object network NET_10.0.0.0_29",
+       " subnet 10.0.0.0 255.255.255.248"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "show route 10.0.0.1"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "wrong way",
+   "plain_status": "chain-target would send this subnet to the internet, not inside.",
+   "fmc_group": "Routing",
+   "n": 1
+  },
+  {
+   "id": "F-c412a38cb9d2",
+   "key": "c412a38cb9d2",
+   "category": "routing",
+   "order": 0,
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "scope": "CAMPUS-NET",
+   "what": "chain-target would send 10.60.0.0/16 (CAMPUS-NET) to the internet, not inside: it has no route for it and uses its default route.",
+   "why": "Return traffic for CAMPUS-NET would leave chain-target toward the internet, so sessions to and from this VLAN fail when chain-target takes over.",
+   "evidence": [
+    {
+     "device": "chain-target",
+     "line": 34,
+     "text": "route OUTSIDE 0.0.0.0 0.0.0.0 203.0.113.1 1"
+    },
+    {
+     "device": "Edge + DC firewall",
+     "line": 47,
+     "text": "route inside 10.60.0.0 255.255.0.0 10.0.0.3 1"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Devices > Device Management > chain-target > Routing > Static Route > Add Route: Interface INSIDE, Available Network NET_10.60.0.0_16, Gateway 10.9.0.2, Metric 1."
+    ],
+    "cli": [
+     "route INSIDE 10.60.0.0 255.255.0.0 10.9.0.2 1"
+    ],
+    "objects": [
+     {
+      "name": "NET_10.60.0.0_16",
+      "type": "Network",
+      "value": "10.60.0.0/16",
+      "cli": [
+       "object network NET_10.60.0.0_16",
+       " subnet 10.60.0.0 255.255.0.0"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "show route 10.60.0.1"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "wrong way",
+   "plain_status": "chain-target would send this subnet to the internet, not inside.",
+   "fmc_group": "Routing",
+   "n": 2
+  },
+  {
+   "id": "F-8236409b90c0",
+   "key": "8236409b90c0",
+   "category": "pat",
+   "order": 1,
+   "scopes": [
+    "10.0.0.0/29"
+   ],
+   "scope": "A1:inside",
+   "what": "chain-target has no outbound PAT for NET_10.0.0.0_29 (A1:inside). Edge + DC firewall does not translate it either.",
+   "why": "Hosts in A1:inside cannot reach the internet through chain-target.",
+   "evidence": [
+    {
+     "device": "chain-target",
+     "line": 0,
+     "text": "(no dynamic NAT covering NET_10.0.0.0_29)"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Devices > NAT > <chain-target NAT policy> > Add Rule: NAT Rule Manual, Type Dynamic, Insert In Category After Auto NAT; Interface Objects: Source INSIDE, Destination OUTSIDE; Translation: Original Source NET_10.0.0.0_29, Translated Source Destination Interface IP (OUTSIDE interface PAT, like its existing PAT rules)."
+    ],
+    "cli": [
+     "nat (INSIDE,OUTSIDE) after-auto source dynamic NET_10.0.0.0_29 interface"
+    ],
+    "objects": [
+     {
+      "name": "NET_10.0.0.0_29",
+      "type": "Network",
+      "value": "10.0.0.0/29",
+      "cli": [
+       "object network NET_10.0.0.0_29",
+       " subnet 10.0.0.0 255.255.255.248"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.0.0.1 40000 8.8.8.8 443",
+    "show xlate local 10.0.0.1"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "no outbound PAT on chain-target",
+   "fmc_group": "NAT",
+   "pat_sources": [
+    "NET_10.0.0.0_29"
+   ],
+   "pat_mode": "interface",
+   "pat_dedicated": [],
+   "pat_pool": 0,
+   "n": 3
+  },
+  {
+   "id": "F-52f564bbd4a4",
+   "key": "52f564bbd4a4",
+   "category": "pat",
+   "order": 1,
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "scope": "CAMPUS-NET",
+   "what": "chain-target has no outbound PAT for NET_10.60.0.0_16 (CAMPUS-NET). Edge + DC firewall translates all of it today (first match: CAMPUS-NET -> interface line 44).",
+   "why": "Hosts in CAMPUS-NET cannot reach the internet through chain-target.",
+   "evidence": [
+    {
+     "device": "Edge (edge)",
+     "line": 44,
+     "text": "nat (inside,outside) after-auto source dynamic CAMPUS-NET interface"
+    },
+    {
+     "device": "chain-target",
+     "line": 0,
+     "text": "(no dynamic NAT covering NET_10.60.0.0_16)"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Devices > NAT > <chain-target NAT policy> > Add Rule: NAT Rule Manual, Type Dynamic, Insert In Category After Auto NAT; Interface Objects: Source INSIDE, Destination OUTSIDE; Translation: Original Source NET_10.60.0.0_16, Translated Source Destination Interface IP (OUTSIDE interface PAT, like its existing PAT rules)."
+    ],
+    "cli": [
+     "nat (INSIDE,OUTSIDE) after-auto source dynamic NET_10.60.0.0_16 interface"
+    ],
+    "objects": [
+     {
+      "name": "NET_10.60.0.0_16",
+      "type": "Network",
+      "value": "10.60.0.0/16",
+      "cli": [
+       "object network NET_10.60.0.0_16",
+       " subnet 10.60.0.0 255.255.0.0"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.60.0.1 40000 8.8.8.8 443",
+    "show xlate local 10.60.0.1"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "no outbound PAT on chain-target",
+   "fmc_group": "NAT",
+   "pat_sources": [
+    "NET_10.60.0.0_16"
+   ],
+   "pat_mode": "interface",
+   "pat_dedicated": [],
+   "pat_pool": 0,
+   "n": 4
+  },
+  {
+   "id": "F-5f963a50a63e",
+   "key": "5f963a50a63e",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.0.0.0/29",
+    "10.50.0.0/16",
+    "10.50.0.0/24",
+    "10.60.0.0/16"
+   ],
+   "scope": "A1:inside, DC-NET, A2:DC-IN, CAMPUS-NET",
+   "what": "DC firewall (inner) rule \"A2:DC-Any\" (1 line) allows DC-NET -> 10.0.0.0/29, 10.60.0.0/16 (ip); chain-target has no matching permit.",
+   "why": "When chain-target takes over, this traffic is dropped.",
+   "evidence": [
+    {
+     "device": "DC firewall (inner)",
+     "line": 26,
+     "text": "access-list CSM_FW_ACL_ advanced permit ip ifc DC-IN object DC-NET ifc DC-OUT any rule-id 202"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > TARGET > Add Rule (Mandatory section, above Web-443, in Edge + DC firewall's rule order): Name \"A2:DC-Any\", Action Allow, Zones: Source INSIDE -> Destination INSIDE, Networks: Source DC-NET, Destination 10.0.0.0/29, 10.60.0.0/16, Ports: any, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE object DC-NET ifc INSIDE 10.0.0.0 255.255.255.248",
+     "access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE object DC-NET ifc INSIDE 10.60.0.0 255.255.0.0"
+    ],
+    "objects": []
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.50.0.1 40000 10.0.0.1 443"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "chain-target has no rule for this traffic; its default action drops it.",
+   "fmc_group": "Access Control",
+   "scopes_any": [],
+   "flags": [],
+   "rule": "A2:DC-Any",
+   "lines": 1,
+   "acp_rules": [
+    "A2:DC-Any"
+   ],
+   "acp_specs": [
+    {
+     "name": "A2:DC-Any",
+     "si": [
+      "INSIDE"
+     ],
+     "di": [
+      "INSIDE"
+     ],
+     "src": [
+      "DC-NET"
+     ],
+     "dst": [
+      "10.0.0.0/29",
+      "10.60.0.0/16"
+     ],
+     "ports": [],
+     "seq": 2,
+     "src_any": false,
+     "pos": 2
+    }
+   ],
+   "objects_on_b": [
+    "DC-NET"
+   ],
+   "n": 5
+  },
+  {
+   "id": "F-3cefa02be427",
+   "key": "3cefa02be427",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.0.0.0/29",
+    "10.50.0.0/16",
+    "10.60.0.0/16"
+   ],
+   "scope": "A1:inside, DC-NET, CAMPUS-NET",
+   "what": "DC firewall (inner) rule \"A2:App40\" (2 lines) allows 10.0.0.0/29, 10.60.0.0/16, any -> APP40 (tcp eq 8443, tcp/8443); chain-target has no matching permit.",
+   "why": "When chain-target takes over, this traffic is dropped.",
+   "evidence": [
+    {
+     "device": "DC firewall (inner)",
+     "line": 32,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object APP40 eq 8443 rule-id 205"
+    },
+    {
+     "device": "DC firewall (inner)",
+     "line": 32,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object APP40 eq 8443 rule-id 205"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > TARGET > Add Rule (Mandatory section, above Web-443, in Edge + DC firewall's rule order): Name \"A2:App40\", Action Allow, Zones: Source INSIDE, OUTSIDE -> Destination INSIDE, Networks: Source any, Destination APP40, Ports: TCP 8443, tcp/8443, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc INSIDE any ifc INSIDE object APP40 eq 8443",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object APP40 eq 8443"
+    ],
+    "objects": [
+     {
+      "name": "APP40",
+      "type": "Host",
+      "value": "10.50.1.40",
+      "cli": [
+       "object network APP40",
+       " host 10.50.1.40"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.0.0.1 40000 10.50.1.40 8443"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "chain-target has no rule for this traffic; its default action drops it.",
+   "fmc_group": "Access Control",
+   "scopes_any": [],
+   "flags": [],
+   "rule": "A2:App40",
+   "lines": 2,
+   "acp_rules": [
+    "A2:App40"
+   ],
+   "acp_specs": [
+    {
+     "name": "A2:App40",
+     "si": [
+      "INSIDE",
+      "OUTSIDE"
+     ],
+     "di": [
+      "INSIDE"
+     ],
+     "src": [
+      "any"
+     ],
+     "dst": [
+      "APP40"
+     ],
+     "ports": [
+      "TCP 8443",
+      "tcp/8443"
+     ],
+     "seq": 5,
+     "src_any": true,
+     "pos": 5
+    }
+   ],
+   "n": 6
+  },
+  {
+   "id": "F-b6d3f654c6ae",
+   "key": "b6d3f654c6ae",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.0.0.0/29",
+    "10.50.0.0/16",
+    "10.60.0.0/16"
+   ],
+   "scope": "A1:inside, DC-NET, CAMPUS-NET",
+   "what": "DC firewall (inner) rule \"A2:Mail-In\" (1 line) allows 10.0.0.0/29, 10.60.0.0/16 -> MAIL (tcp eq smtp); chain-target has no matching permit.",
+   "why": "When chain-target takes over, this traffic is dropped.",
+   "evidence": [
+    {
+     "device": "DC firewall (inner)",
+     "line": 30,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object MAIL eq smtp rule-id 204"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > TARGET > Add Rule (Mandatory section, above Web-443, in Edge + DC firewall's rule order): Name \"A2:Mail-In\", Action Allow, Zones: Source INSIDE -> Destination INSIDE, Networks: Source 10.0.0.0/29, 10.60.0.0/16, Destination MAIL, Ports: TCP smtp, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc INSIDE 10.0.0.0 255.255.255.248 ifc INSIDE object MAIL eq 25",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc INSIDE 10.60.0.0 255.255.0.0 ifc INSIDE object MAIL eq 25"
+    ],
+    "objects": [
+     {
+      "name": "MAIL",
+      "type": "Host",
+      "value": "10.50.1.30",
+      "cli": [
+       "object network MAIL",
+       " host 10.50.1.30"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.0.0.1 40000 10.50.1.30 25"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "chain-target has no rule for this traffic; its default action drops it.",
+   "fmc_group": "Access Control",
+   "scopes_any": [],
+   "flags": [],
+   "rule": "A2:Mail-In",
+   "lines": 1,
+   "acp_rules": [
+    "A2:Mail-In"
+   ],
+   "acp_specs": [
+    {
+     "name": "A2:Mail-In",
+     "si": [
+      "INSIDE"
+     ],
+     "di": [
+      "INSIDE"
+     ],
+     "src": [
+      "10.0.0.0/29",
+      "10.60.0.0/16"
+     ],
+     "dst": [
+      "MAIL"
+     ],
+     "ports": [
+      "TCP smtp"
+     ],
+     "seq": 4,
+     "src_any": false,
+     "pos": 4
+    }
+   ],
+   "n": 7
+  },
+  {
+   "id": "F-bfba77e78166",
+   "key": "bfba77e78166",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.0.0.0/29",
+    "10.50.0.0/16",
+    "10.60.0.0/16"
+   ],
+   "scope": "A1:inside, DC-NET, CAMPUS-NET",
+   "what": "DC firewall (inner) rule \"A2:Web-443\" (1 line) allows 10.0.0.0/29, 10.60.0.0/16 -> WEB (tcp eq https); chain-target has no matching permit.",
+   "why": "When chain-target takes over, this traffic is dropped.",
+   "evidence": [
+    {
+     "device": "DC firewall (inner)",
+     "line": 24,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object WEB eq https rule-id 201"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > TARGET > Add Rule (Mandatory section, above Web-443, in Edge + DC firewall's rule order): Name \"A2:Web-443\", Action Allow, Zones: Source INSIDE -> Destination INSIDE, Networks: Source 10.0.0.0/29, 10.60.0.0/16, Destination WEB, Ports: TCP https, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc INSIDE 10.0.0.0 255.255.255.248 ifc INSIDE object WEB eq 443",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc INSIDE 10.60.0.0 255.255.0.0 ifc INSIDE object WEB eq 443"
+    ],
+    "objects": [
+     {
+      "name": "WEB",
+      "type": "Host",
+      "value": "10.50.1.10",
+      "cli": [
+       "object network WEB",
+       " host 10.50.1.10"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.0.0.1 40000 10.50.1.10 443"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "chain-target has no rule for this traffic; its default action drops it.",
+   "fmc_group": "Access Control",
+   "scopes_any": [],
+   "flags": [],
+   "rule": "A2:Web-443",
+   "lines": 1,
+   "acp_rules": [
+    "A2:Web-443"
+   ],
+   "acp_specs": [
+    {
+     "name": "A2:Web-443",
+     "si": [
+      "INSIDE"
+     ],
+     "di": [
+      "INSIDE"
+     ],
+     "src": [
+      "10.0.0.0/29",
+      "10.60.0.0/16"
+     ],
+     "dst": [
+      "WEB"
+     ],
+     "ports": [
+      "TCP https"
+     ],
+     "seq": 1,
+     "src_any": false,
+     "pos": 1
+    }
+   ],
+   "n": 8
+  },
+  {
+   "id": "F-08bdf1e7dfb1",
+   "key": "08bdf1e7dfb1",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.60.0.0/16"
+   ],
+   "scope": "CAMPUS-NET",
+   "what": "Edge (edge) rule \"A1:Campus-Out\" (1 line) allows CAMPUS-NET -> any (ip); chain-target has no matching permit.",
+   "why": "When chain-target takes over, this traffic is dropped.",
+   "evidence": [
+    {
+     "device": "Edge (edge)",
+     "line": 34,
+     "text": "access-list CSM_FW_ACL_ advanced permit ip ifc inside object CAMPUS-NET ifc outside any rule-id 103"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > TARGET > Add Rule (Mandatory section, above Web-443, in Edge + DC firewall's rule order): Name \"A1:Campus-Out\", Action Allow, Zones: Source INSIDE -> Destination OUTSIDE, Networks: Source CAMPUS-NET, Destination any, Ports: any, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE object CAMPUS-NET ifc OUTSIDE any"
+    ],
+    "objects": [
+     {
+      "name": "CAMPUS-NET",
+      "type": "Network",
+      "value": "10.60.0.0/16",
+      "cli": [
+       "object network CAMPUS-NET",
+       " subnet 10.60.0.0 255.255.0.0"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.60.0.1 40000 0.0.0.1 443"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "chain-target has no rule for this traffic; its default action drops it.",
+   "fmc_group": "Access Control",
+   "scopes_any": [],
+   "flags": [],
+   "rule": "A1:Campus-Out",
+   "lines": 1,
+   "acp_rules": [
+    "A1:Campus-Out"
+   ],
+   "acp_specs": [
+    {
+     "name": "A1:Campus-Out",
+     "si": [
+      "INSIDE"
+     ],
+     "di": [
+      "OUTSIDE"
+     ],
+     "src": [
+      "CAMPUS-NET"
+     ],
+     "dst": [
+      "any"
+     ],
+     "ports": [],
+     "seq": 6,
+     "src_any": false,
+     "pos": 6
+    }
+   ],
+   "n": 9
+  },
+  {
+   "id": "F-cf173706725f",
+   "key": "cf173706725f",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "scope": "DC-NET",
+   "what": "chain-target rule \"Jump-SSH\" (1 line) allows any -> JUMP (tcp eq ssh), which Edge + DC firewall does not allow.",
+   "why": "chain-target would expose more than Edge + DC firewall does today.",
+   "evidence": [
+    {
+     "device": "chain-target",
+     "line": 28,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object JUMP eq ssh rule-id 304"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > TARGET > rule \"Jump-SSH\": narrow Source/Destination/Ports to what Edge + DC firewall allows, or disable it."
+    ],
+    "cli": [
+     "(review) access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object JUMP eq ssh rule-id 304"
+    ],
+    "objects": []
+   },
+   "verify": [
+    "show access-list CSM_FW_ACL_ | include 304"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "over-permitted",
+   "plain_status": "chain-target allows more than Edge + DC firewall.",
+   "fmc_group": "Access Control",
+   "scopes_any": [
+    "10.0.0.0/29",
+    "10.50.0.0/24",
+    "10.60.0.0/16"
+   ],
+   "flags": [],
+   "rule": "Jump-SSH",
+   "lines": 1,
+   "n": 10
+  },
+  {
+   "id": "F-b49a19958b57",
+   "key": "b49a19958b57",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.50.0.0/16"
+   ],
+   "scope": "DC-NET",
+   "what": "chain-target rule \"Web-80\" (1 line) allows any -> WEB-SERVER (tcp eq www), which Edge + DC firewall does not allow.",
+   "why": "chain-target would expose more than Edge + DC firewall does today.",
+   "evidence": [
+    {
+     "device": "chain-target",
+     "line": 24,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB-SERVER eq www rule-id 302"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > TARGET > rule \"Web-80\": narrow Source/Destination/Ports to what Edge + DC firewall allows, or disable it."
+    ],
+    "cli": [
+     "(review) access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB-SERVER eq www rule-id 302"
+    ],
+    "objects": []
+   },
+   "verify": [
+    "show access-list CSM_FW_ACL_ | include 302"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "over-permitted",
+   "plain_status": "chain-target allows more than Edge + DC firewall.",
+   "fmc_group": "Access Control",
+   "scopes_any": [
+    "10.0.0.0/29",
+    "10.50.0.0/24",
+    "10.60.0.0/16"
+   ],
+   "flags": [],
+   "rule": "Web-80",
+   "lines": 1,
+   "n": 11
+  },
+  {
+   "id": "F-ec66172fda46",
+   "key": "ec66172fda46",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.50.0.0/16",
+    "10.50.0.0/24",
+    "10.60.0.0/16"
+   ],
+   "scope": "DC-NET, A2:DC-IN, CAMPUS-NET",
+   "what": "DC firewall (inner) rule \"A2:Campus-RDP\" (1 line) allows CAMPUS-NET -> DC-NET (tcp eq 3389); chain-target has no matching permit.",
+   "why": "When chain-target takes over, this traffic is dropped.",
+   "evidence": [
+    {
+     "device": "DC firewall (inner)",
+     "line": 28,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT object CAMPUS-NET ifc DC-IN object DC-NET eq 3389 rule-id 203"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > TARGET > Add Rule (Mandatory section, above Web-443, in Edge + DC firewall's rule order): Name \"A2:Campus-RDP\", Action Allow, Zones: Source INSIDE -> Destination INSIDE, Networks: Source CAMPUS-NET, Destination DC-NET, Ports: TCP 3389, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc INSIDE object CAMPUS-NET ifc INSIDE object DC-NET eq 3389"
+    ],
+    "objects": [
+     {
+      "name": "CAMPUS-NET",
+      "type": "Network",
+      "value": "10.60.0.0/16",
+      "cli": [
+       "object network CAMPUS-NET",
+       " subnet 10.60.0.0 255.255.0.0"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.60.0.1 40000 10.50.0.1 3389"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "chain-target has no rule for this traffic; its default action drops it.",
+   "fmc_group": "Access Control",
+   "scopes_any": [],
+   "flags": [],
+   "rule": "A2:Campus-RDP",
+   "lines": 1,
+   "acp_rules": [
+    "A2:Campus-RDP"
+   ],
+   "acp_specs": [
+    {
+     "name": "A2:Campus-RDP",
+     "si": [
+      "INSIDE"
+     ],
+     "di": [
+      "INSIDE"
+     ],
+     "src": [
+      "CAMPUS-NET"
+     ],
+     "dst": [
+      "DC-NET"
+     ],
+     "ports": [
+      "TCP 3389"
+     ],
+     "seq": 3,
+     "src_any": false,
+     "pos": 3
+    }
+   ],
+   "objects_on_b": [
+    "DC-NET"
+   ],
+   "n": 12
+  }
+ ],
+ "decisions": [],
+ "readiness": [
+  {
+   "subnet": "10.0.0.0/29",
+   "scope": "A1:inside",
+   "lines": [
+    {
+     "name": "Routing",
+     "actions": 1,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "Outbound internet (PAT)",
+     "actions": 1,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "Published servers (inbound)",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Access rules",
+     "actions": 4,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "DNS changes",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Public IPs",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": "0 new needed: (a) 0 published servers, (b) 0 outbound identity (0 NATs, 0 addresses, not kept), (c) 0 PAT"
+    }
+   ],
+   "actions": 6,
+   "decisions": 0,
+   "ready": false,
+   "verdict": "chain-target can take over A1:inside: no - 6 actions, 0 decisions"
+  },
+  {
+   "subnet": "10.50.0.0/16",
+   "scope": "DC-NET",
+   "lines": [
+    {
+     "name": "Routing",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Outbound internet (PAT)",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Published servers (inbound)",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Access rules",
+     "actions": 7,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "DNS changes",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Public IPs",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": "0 new needed: (a) 0 published servers, (b) 0 outbound identity (0 NATs, 0 addresses, not kept), (c) 0 PAT"
+    }
+   ],
+   "actions": 7,
+   "decisions": 0,
+   "ready": false,
+   "verdict": "chain-target can take over DC-NET: no - 7 actions, 0 decisions"
+  },
+  {
+   "subnet": "10.60.0.0/16",
+   "scope": "CAMPUS-NET",
+   "lines": [
+    {
+     "name": "Routing",
+     "actions": 1,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "Outbound internet (PAT)",
+     "actions": 1,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "Published servers (inbound)",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Access rules",
+     "actions": 6,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "DNS changes",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Public IPs",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": "0 new needed: (a) 0 published servers, (b) 0 outbound identity (0 NATs, 0 addresses, not kept), (c) 0 PAT"
+    }
+   ],
+   "actions": 8,
+   "decisions": 0,
+   "ready": false,
+   "verdict": "chain-target can take over CAMPUS-NET: no - 8 actions, 0 decisions"
+  },
+  {
+   "subnet": "10.50.0.0/24",
+   "scope": "A2:DC-IN",
+   "lines": [
+    {
+     "name": "Routing",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Outbound internet (PAT)",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Published servers (inbound)",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Access rules",
+     "actions": 2,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "DNS changes",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Public IPs",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": "0 new needed: (a) 0 published servers, (b) 0 outbound identity (0 NATs, 0 addresses, not kept), (c) 0 PAT"
+    }
+   ],
+   "actions": 2,
+   "decisions": 0,
+   "ready": false,
+   "verdict": "chain-target can take over A2:DC-IN: no - 2 actions, 0 decisions"
+  }
+ ],
+ "plan": {
+  "groups": [
+   {
+    "name": "Objects",
+    "count": 0,
+    "items": []
+   },
+   {
+    "name": "Routing",
+    "count": 0,
+    "items": []
+   },
+   {
+    "name": "NAT",
+    "count": 0,
+    "items": []
+   },
+   {
+    "name": "Access Control",
+    "count": 0,
+    "items": []
+   },
+   {
+    "name": "DNS",
+    "count": 0,
+    "items": []
+   }
+  ],
+  "total": 0,
+  "findings": 0,
+  "public_ips": {
+   "a": 0,
+   "b": 0,
+   "c": 0,
+   "total": 0
+  },
+  "public_text": "0 new chain-target public IPs for these changes: (a) 0 published servers, (b) 0 outbound identities, (c) 0 PAT addresses"
+ }
+}

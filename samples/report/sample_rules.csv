@@ -1,0 +1,5 @@
+id,path,scope,status,action_check,policy,rule,intersected_with,src_ifc,dst_ifc,b_src_ifc,b_dst_ifc,src,dst,service,direction,detail,b_rules
+R1,,"VLAN 10 inside, LAN20",partial,,EDGE-ACP - Mandatory,Web-In,,outside,inside,OUTSIDE,INSIDE,any,INNER,tcp WEBPORTS,from scope + to scope,not all traffic or services permitted,Web-In #2
+R2,,"VLAN 10 inside, LAN20",shadowed,,,Lan-Out,,inside,outside,INSIDE,OUTSIDE,LAN20,any,ip,from scope + to scope,earlier B deny Block-8000,"Block-8000 #1, Lan-Out #3"
+R3,,"VLAN 10 inside, LAN20",shadowed,,,Mixed,,inside,outside,INSIDE,OUTSIDE,LAN20,any,MIXED,from scope + to scope,earlier B deny Block-8000,"Block-8000 #1, Lan-Out #3"
+R4,,"VLAN 10 inside, LAN20",missing,action unknown (L7),,Web2-In,,outside,inside,OUTSIDE,INSIDE,any,10.20.0.11,tcp eq 443,from scope + to scope,no B permit,

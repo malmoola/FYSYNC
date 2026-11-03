@@ -1,0 +1,15 @@
+{
+ "name": "example",
+ "type": "standard",
+ "scope": ["192.0.2.0/24"],
+ "scope_names": {"192.0.2.0/24": "VLAN 10"},
+ "interface_map": {"inside": "INSIDE", "outside": "OUTSIDE"},
+ "outside_a": ["outside"],
+ "outside_b": ["OUTSIDE"],
+ "public_b": [],
+ "public_map": {"198.51.100.10": "203.0.113.10"},
+ "public_pool_b": ["203.0.113.32-203.0.113.47"],
+ "rename": [{"pattern": "^SRV_", "replace": "SRV_"}],
+ "zone_map": {"INSIDE": "INSIDE_ZONE", "OUTSIDE": "OUTSIDE_ZONE"},
+ "fmc": {"access_policy": "B-ACP", "nat_policy": "B-NAT"}
+}

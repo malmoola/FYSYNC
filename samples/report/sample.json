@@ -1,0 +1,1906 @@
+{
+ "a": {
+  "name": "edge-a.txt",
+  "vendor": "lina",
+  "hostname": "edge-a",
+  "interfaces": 2,
+  "routes": 2,
+  "objects": 10,
+  "service_objects": 2,
+  "rules": 5,
+  "nats": 4,
+  "warnings": 0
+ },
+ "b": {
+  "name": "edge-b.txt",
+  "vendor": "lina",
+  "hostname": "edge-b",
+  "interfaces": 2,
+  "routes": 2,
+  "objects": 5,
+  "service_objects": 0,
+  "rules": 4,
+  "nats": 2,
+  "warnings": 0
+ },
+ "profile": "default",
+ "scope": [
+  "10.10.0.0/24",
+  "10.20.0.0/24"
+ ],
+ "scope_names": {
+  "10.10.0.0/24": "VLAN 10 inside",
+  "10.20.0.0/24": "LAN20"
+ },
+ "rules": [
+  {
+   "id": "R1",
+   "path": "",
+   "policy": "EDGE-ACP - Mandatory",
+   "rule": "Web-In",
+   "rule_id": "100",
+   "action": "permit",
+   "src_ifc": "outside",
+   "dst_ifc": "inside",
+   "b_src_ifc": "OUTSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "any",
+   "dst": "INNER",
+   "service": "tcp WEBPORTS",
+   "svc": "tcp/80 tcp/443",
+   "scope": "VLAN 10 inside, LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "direction": "from scope + to scope",
+   "status": "partial",
+   "detail": "not all traffic or services permitted",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [
+    "Web-In #2"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object-group INNER object-group WEBPORTS rule-id 100",
+   "key": "rule||8cd5ce28b045"
+  },
+  {
+   "id": "R2",
+   "path": "",
+   "policy": "",
+   "rule": "Lan-Out",
+   "rule_id": "101",
+   "action": "permit",
+   "src_ifc": "inside",
+   "dst_ifc": "outside",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "OUTSIDE",
+   "src": "LAN20",
+   "dst": "any",
+   "service": "ip",
+   "svc": "ip",
+   "scope": "VLAN 10 inside, LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "direction": "from scope + to scope",
+   "status": "shadowed",
+   "detail": "earlier B deny Block-8000",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [
+    "Block-8000 #1",
+    "Lan-Out #3"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit ip ifc inside object LAN20 ifc outside any rule-id 101",
+   "key": "rule||5b198d01e009"
+  },
+  {
+   "id": "R3",
+   "path": "",
+   "policy": "",
+   "rule": "Mixed",
+   "rule_id": "102",
+   "action": "permit",
+   "src_ifc": "inside",
+   "dst_ifc": "outside",
+   "b_src_ifc": "INSIDE",
+   "b_dst_ifc": "OUTSIDE",
+   "src": "LAN20",
+   "dst": "any",
+   "service": "MIXED",
+   "svc": "tcp/8000-8010 udp/53",
+   "scope": "VLAN 10 inside, LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "direction": "from scope + to scope",
+   "status": "shadowed",
+   "detail": "earlier B deny Block-8000",
+   "l7": false,
+   "action_check": "",
+   "b_rules": [
+    "Block-8000 #1",
+    "Lan-Out #3"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit object-group MIXED ifc inside object LAN20 ifc outside any rule-id 102",
+   "key": "rule||6873dff18a4f"
+  },
+  {
+   "id": "R4",
+   "path": "",
+   "policy": "",
+   "rule": "Web2-In",
+   "rule_id": "103",
+   "action": "permit",
+   "src_ifc": "outside",
+   "dst_ifc": "inside",
+   "b_src_ifc": "OUTSIDE",
+   "b_dst_ifc": "INSIDE",
+   "src": "any",
+   "dst": "10.20.0.11",
+   "service": "tcp eq 443",
+   "svc": "tcp/443",
+   "scope": "VLAN 10 inside, LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "direction": "from scope + to scope",
+   "status": "missing",
+   "detail": "no B permit",
+   "l7": true,
+   "action_check": "action unknown (L7)",
+   "b_rules": [],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside host 10.20.0.11 eq 443 rule-id 103",
+   "key": "rule||0b40672209b9"
+  }
+ ],
+ "nat": [
+  {
+   "id": "N1",
+   "section": "manual-before",
+   "kind": "static",
+   "a_ifc": "inside->outside",
+   "real_ref": "WEB1",
+   "real": "10.20.0.10/32",
+   "a_mapped": "198.51.100.10/32",
+   "a_dst": "",
+   "a_inactive": false,
+   "description": "",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "line": "nat (inside,outside) source static WEB1 PUB_WEB1",
+   "outbound_only": false,
+   "status": "match",
+   "b_nat": "#1 WEB1",
+   "b_mapped": "203.0.113.10",
+   "detail": "",
+   "key": "nat|734a7961bfc0"
+  },
+  {
+   "id": "N2",
+   "section": "manual-before",
+   "kind": "static",
+   "a_ifc": "inside->outside",
+   "real_ref": "WEB2",
+   "real": "10.20.0.11/32",
+   "a_mapped": "198.51.100.11/32",
+   "a_dst": "",
+   "a_inactive": false,
+   "description": "web two",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "line": "nat (inside,outside) source static WEB2 PUB_WEB2 description web two",
+   "outbound_only": false,
+   "status": "inactive on B",
+   "b_nat": "#2 WEB-ONE-RENAMED",
+   "b_mapped": "203.0.113.11",
+   "detail": "B has the NAT but it is inactive",
+   "key": "nat|e047cfc0f1bb"
+  },
+  {
+   "id": "N4",
+   "section": "auto",
+   "kind": "dynamic PAT",
+   "a_ifc": "inside->outside",
+   "real_ref": "RANGE1",
+   "real": "10.20.0.100/30, 10.20.0.104/30, 10.20.0.108/31, 10.20.0.110/32",
+   "a_mapped": "198.51.100.20/32",
+   "a_dst": "",
+   "a_inactive": false,
+   "description": "",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "line": "object network RANGE1 / nat (inside,outside) dynamic PAT_LAN20",
+   "status": "missing",
+   "b_nat": "",
+   "b_mapped": "",
+   "detail": "",
+   "key": "nat|540e06a13a23"
+  },
+  {
+   "id": "N3",
+   "section": "manual-after",
+   "kind": "dynamic PAT",
+   "a_ifc": "inside->outside",
+   "real_ref": "LAN20",
+   "real": "10.20.0.0/24",
+   "a_mapped": "interface",
+   "a_dst": "",
+   "a_inactive": false,
+   "description": "",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "line": "nat (inside,outside) after-auto source dynamic LAN20 interface",
+   "status": "missing",
+   "b_nat": "",
+   "b_mapped": "",
+   "detail": "",
+   "key": "nat|3bad613fea63"
+  }
+ ],
+ "pat": [
+  {
+   "id": "P-A-10.10.0.0/24",
+   "side": "A",
+   "firewall": "edge-a.txt",
+   "subnet": "10.10.0.0/24",
+   "scope": "VLAN 10 inside",
+   "scopes": [
+    "10.10.0.0/24"
+   ],
+   "status": "missing",
+   "nat": "",
+   "section": "",
+   "out_ifc": "outside",
+   "key": "pat|P-A-10.10.0.0/24"
+  },
+  {
+   "id": "P-B-10.10.0.0/24",
+   "side": "B",
+   "firewall": "edge-b.txt",
+   "subnet": "10.10.0.0/24",
+   "scope": "VLAN 10 inside",
+   "scopes": [
+    "10.10.0.0/24"
+   ],
+   "status": "missing",
+   "nat": "",
+   "section": "",
+   "out_ifc": "OUTSIDE",
+   "key": "pat|P-B-10.10.0.0/24"
+  },
+  {
+   "id": "P-A-10.20.0.0/24",
+   "side": "A",
+   "firewall": "edge-a.txt",
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "status": "covered",
+   "nat": "#1 WEB1 -> PUB_WEB1 (line 52); #2 WEB2 -> PUB_WEB2 (line 53); #4 RANGE1 -> PAT_LAN20 (line 56); #3 LAN20 -> interface (line 54)",
+   "section": "manual-before",
+   "out_ifc": "outside",
+   "key": "pat|P-A-10.20.0.0/24"
+  },
+  {
+   "id": "P-B-10.20.0.0/24",
+   "side": "B",
+   "firewall": "edge-b.txt",
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "status": "missing",
+   "nat": "#1 WEB1 -> B_PUB_WEB1 (line 27)",
+   "section": "manual-before",
+   "out_ifc": "OUTSIDE",
+   "key": "pat|P-B-10.20.0.0/24"
+  }
+ ],
+ "pat_detail": [
+  {
+   "id": "PD-A-none-10.10.0.0/24",
+   "side": "A",
+   "firewall": "edge-a.txt",
+   "subnet": "10.10.0.0/24",
+   "scope": "VLAN 10 inside",
+   "addresses": "10.10.0.0/24",
+   "count": 256,
+   "status": "not translated",
+   "object": "",
+   "mapped": "",
+   "section": "",
+   "line": ""
+  },
+  {
+   "id": "PD-B-none-10.10.0.0/24",
+   "side": "B",
+   "firewall": "edge-b.txt",
+   "subnet": "10.10.0.0/24",
+   "scope": "VLAN 10 inside",
+   "addresses": "10.10.0.0/24",
+   "count": 256,
+   "status": "not translated",
+   "object": "",
+   "mapped": "",
+   "section": "",
+   "line": ""
+  },
+  {
+   "id": "PD-A-1-10.20.0.0/24",
+   "side": "A",
+   "firewall": "edge-a.txt",
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "addresses": "10.20.0.10/32",
+   "count": 1,
+   "status": "translated",
+   "kind": "1:1",
+   "object": "WEB1",
+   "mapped": "PUB_WEB1",
+   "section": "manual-before",
+   "line": 52,
+   "order": 1
+  },
+  {
+   "id": "PD-A-2-10.20.0.0/24",
+   "side": "A",
+   "firewall": "edge-a.txt",
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "addresses": "10.20.0.11/32",
+   "count": 1,
+   "status": "translated",
+   "kind": "1:1",
+   "object": "WEB2",
+   "mapped": "PUB_WEB2",
+   "section": "manual-before",
+   "line": 53,
+   "order": 2
+  },
+  {
+   "id": "PD-A-4-10.20.0.0/24",
+   "side": "A",
+   "firewall": "edge-a.txt",
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "addresses": "10.20.0.100/30, 10.20.0.104/30, 10.20.0.108/31, 10.20.0.110/32",
+   "count": 11,
+   "status": "translated",
+   "kind": "shared",
+   "object": "RANGE1",
+   "mapped": "PAT_LAN20",
+   "section": "auto",
+   "line": 56,
+   "order": 3
+  },
+  {
+   "id": "PD-A-3-10.20.0.0/24",
+   "side": "A",
+   "firewall": "edge-a.txt",
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "addresses": "10.20.0.0/29, 10.20.0.8/31, 10.20.0.12/30, 10.20.0.16/28, 10.20.0.32/27, 10.20.0.64/27 ...(+4)",
+   "count": 243,
+   "status": "translated",
+   "kind": "shared",
+   "object": "LAN20",
+   "mapped": "interface",
+   "section": "manual-after",
+   "line": 54,
+   "order": 4
+  },
+  {
+   "id": "PD-B-1-10.20.0.0/24",
+   "side": "B",
+   "firewall": "edge-b.txt",
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "addresses": "10.20.0.10/32",
+   "count": 1,
+   "status": "translated",
+   "kind": "1:1",
+   "object": "WEB1",
+   "mapped": "B_PUB_WEB1",
+   "section": "manual-before",
+   "line": 27,
+   "order": 1
+  },
+  {
+   "id": "PD-B-none-10.20.0.0/24",
+   "side": "B",
+   "firewall": "edge-b.txt",
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "addresses": "10.20.0.0/29, 10.20.0.8/31, 10.20.0.11/32, 10.20.0.12/30, 10.20.0.16/28, 10.20.0.32/27 ...(+2)",
+   "count": 255,
+   "status": "not translated",
+   "object": "",
+   "mapped": "",
+   "section": "",
+   "line": ""
+  }
+ ],
+ "public": [
+  {
+   "id": "PUB-10.20.0.0/24",
+   "scope": "LAN20",
+   "subnet": "10.20.0.0/24",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "a_static_active": 2,
+   "b_missing": 0,
+   "b_inactive": 1,
+   "b_public_needed": 1,
+   "b_public_new": 0,
+   "pub_a": 0,
+   "pub_b": 0,
+   "pub_b_nats": 0,
+   "pub_b_hosts": [],
+   "status": "needs 1",
+   "key": "public|PUB-10.20.0.0/24"
+  },
+  {
+   "id": "PUB-TOTAL",
+   "scope": "total",
+   "subnet": "203.0.113.0/24",
+   "a_static_active": "",
+   "b_missing": 0,
+   "b_inactive": 1,
+   "b_public_needed": 1,
+   "b_public_new": 0,
+   "b_public_available": 250,
+   "status": "ok (B ranges assumed from config)",
+   "key": "public|PUB-TOTAL"
+  },
+  {
+   "id": "PUB-B-203.0.113.0/24",
+   "scope": "B used",
+   "subnet": "203.0.113.0/24",
+   "a_static_active": "",
+   "b_missing": "",
+   "b_inactive": "",
+   "b_public_needed": "",
+   "b_public_new": "",
+   "status": "2 used: 203.0.113.10, 203.0.113.11",
+   "key": "public|PUB-B-203.0.113.0/24"
+  }
+ ],
+ "inbound": [
+  {
+   "id": "I1",
+   "object": "WEB1",
+   "real": "10.20.0.10/32",
+   "a_public": "198.51.100.10",
+   "b_public": "203.0.113.10",
+   "ports": "tcp WEBPORTS",
+   "a_rules": "Web-In",
+   "b_rules": "Web-In",
+   "status": "nat ok, rule partial",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "nat_id": "N1",
+   "nat_status": "match",
+   "rule_status": "partial",
+   "description": "",
+   "key": "inbound|WEB1"
+  },
+  {
+   "id": "I2",
+   "object": "WEB2",
+   "real": "10.20.0.11/32",
+   "a_public": "198.51.100.11",
+   "b_public": "203.0.113.11",
+   "ports": "tcp eq 443",
+   "a_rules": "Web2-In",
+   "b_rules": "",
+   "status": "nat inactive on B, rule missing",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "nat_id": "N2",
+   "nat_status": "inactive on B",
+   "rule_status": "missing",
+   "description": "web two",
+   "key": "inbound|WEB2"
+  }
+ ],
+ "dns": [
+  {
+   "host": "WEB1",
+   "description": "",
+   "real_ip": "10.20.0.10/32",
+   "a_public_ip": "198.51.100.10",
+   "b_public_ip": "203.0.113.10",
+   "b_status": "match",
+   "ports": "tcp WEBPORTS",
+   "scope": "LAN20",
+   "key": "dns|WEB1"
+  },
+  {
+   "host": "WEB2",
+   "description": "web two",
+   "real_ip": "10.20.0.11/32",
+   "a_public_ip": "198.51.100.11",
+   "b_public_ip": "203.0.113.11",
+   "b_status": "inactive on B",
+   "ports": "tcp eq 443",
+   "scope": "LAN20",
+   "key": "dns|WEB2"
+  }
+ ],
+ "routing": [
+  {
+   "id": "RT-10.10.0.0/24",
+   "scope": "VLAN 10 inside",
+   "scopes": [
+    "10.10.0.0/24"
+   ],
+   "subnet": "10.10.0.0/24",
+   "a_ifc": "inside",
+   "a_role": "inside",
+   "expected_b_ifc": "INSIDE",
+   "b_route": "10.10.0.0/24 via INSIDE (ok)",
+   "b_next_hop": "10.10.0.0/24 connected",
+   "status": "ok",
+   "detail": "",
+   "key": "routing|10.10.0.0/24"
+  },
+  {
+   "id": "RT-10.20.0.0/24",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "subnet": "10.20.0.0/24",
+   "a_ifc": "inside",
+   "a_role": "inside",
+   "expected_b_ifc": "INSIDE",
+   "b_route": "10.20.0.0/24 via INSIDE (ok)",
+   "b_next_hop": "10.20.0.0/24 10.10.0.254",
+   "status": "ok",
+   "detail": "",
+   "key": "routing|10.20.0.0/24"
+  }
+ ],
+ "objects": [
+  {
+   "id": "O-WEB1",
+   "name": "WEB1",
+   "b_name": "WEB1",
+   "kind": "host",
+   "value": "10.20.0.10",
+   "addrs": "10.20.0.10/32",
+   "status": "same",
+   "b_value_or_names": "",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "description": "",
+   "key": "objects|WEB1"
+  },
+  {
+   "id": "O-WEB2",
+   "name": "WEB2",
+   "b_name": "WEB2",
+   "kind": "host",
+   "value": "10.20.0.11",
+   "addrs": "10.20.0.11/32",
+   "status": "same value, different name",
+   "b_value_or_names": "WEB-ONE-RENAMED",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "description": "",
+   "key": "objects|WEB2"
+  },
+  {
+   "id": "O-LAN20",
+   "name": "LAN20",
+   "b_name": "LAN20",
+   "kind": "subnet",
+   "value": "10.20.0.0 255.255.255.0",
+   "addrs": "10.20.0.0/24",
+   "status": "same name, different value",
+   "b_value_or_names": "10.20.0.0/23",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "description": "",
+   "key": "objects|LAN20"
+  },
+  {
+   "id": "O-RANGE1",
+   "name": "RANGE1",
+   "b_name": "RANGE1",
+   "kind": "range",
+   "value": "10.20.0.100 10.20.0.110",
+   "addrs": "10.20.0.100/30, 10.20.0.104/30, 10.20.0.108/31, 10.20.0.110/32",
+   "status": "missing on B",
+   "b_value_or_names": "",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "description": "",
+   "key": "objects|RANGE1"
+  },
+  {
+   "id": "O-INNER",
+   "name": "INNER",
+   "b_name": "INNER",
+   "kind": "group",
+   "value": "10.20.0.10/32, 10.20.0.12/32",
+   "addrs": "10.20.0.10/32, 10.20.0.12/32",
+   "status": "missing on B",
+   "b_value_or_names": "",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "description": "",
+   "key": "objects|INNER"
+  },
+  {
+   "id": "O-OUTER",
+   "name": "OUTER",
+   "b_name": "OUTER",
+   "kind": "group",
+   "value": "10.20.0.10/32, 10.20.0.12/32, 10.30.0.0/16",
+   "addrs": "10.20.0.10/32, 10.20.0.12/32, 10.30.0.0/16",
+   "status": "missing on B",
+   "b_value_or_names": "",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "description": "",
+   "key": "objects|OUTER"
+  }
+ ],
+ "b_rules": [
+  {
+   "id": "BR2",
+   "policy": "",
+   "rule": "Web-In",
+   "rule_id": "201",
+   "src_ifc": "OUTSIDE",
+   "dst_ifc": "INSIDE",
+   "src": "any",
+   "dst": "10.20.0.10",
+   "service": "tcp eq www",
+   "scope": "VLAN 10 inside, LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "status": "also on A",
+   "a_rules": [
+    "Web-In #1"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE host 10.20.0.10 eq www rule-id 201",
+   "key": "b_rules|348af3bf4419"
+  },
+  {
+   "id": "BR3",
+   "policy": "",
+   "rule": "Lan-Out",
+   "rule_id": "202",
+   "src_ifc": "INSIDE",
+   "dst_ifc": "OUTSIDE",
+   "src": "10.20.0.0 255.255.255.0",
+   "dst": "any",
+   "service": "ip",
+   "scope": "VLAN 10 inside, LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "status": "also on A",
+   "a_rules": [
+    "Lan-Out #2"
+   ],
+   "line": "access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE 10.20.0.0 255.255.255.0 ifc OUTSIDE any rule-id 202",
+   "key": "b_rules|267ae3bd5996"
+  }
+ ],
+ "b_nat": [
+  {
+   "id": "BN1",
+   "kind": "static",
+   "b_ifc": "INSIDE->OUTSIDE",
+   "real_ref": "WEB1",
+   "real": "10.20.0.10/32",
+   "b_mapped": "203.0.113.10/32",
+   "b_inactive": false,
+   "status": "also on A (other public IP)",
+   "a_nat": "#1 WEB1",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "line": "nat (INSIDE,OUTSIDE) source static WEB1 B_PUB_WEB1",
+   "key": "b_nat|d0206f6356e0"
+  },
+  {
+   "id": "BN2",
+   "kind": "static",
+   "b_ifc": "INSIDE->OUTSIDE",
+   "real_ref": "WEB-ONE-RENAMED",
+   "real": "10.20.0.11/32",
+   "b_mapped": "203.0.113.11/32",
+   "b_inactive": true,
+   "status": "also on A (other public IP)",
+   "a_nat": "#2 WEB2",
+   "scope": "LAN20",
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "line": "nat (INSIDE,OUTSIDE) source static WEB-ONE-RENAMED B_PUB_WEB2 inactive",
+   "key": "b_nat|007f2176e5e7"
+  }
+ ],
+ "b_objects": [],
+ "held_rules": [],
+ "counts": {
+  "rules": {
+   "partial": 1,
+   "shadowed": 2,
+   "missing": 1
+  },
+  "nat": {
+   "match": 1,
+   "inactive on B": 1,
+   "missing": 2
+  },
+  "pat": {
+   "A missing": 1,
+   "B missing": 2,
+   "A covered": 1
+  },
+  "inbound": {
+   "nat ok, rule partial": 1,
+   "nat inactive on B, rule missing": 1
+  },
+  "routing": {
+   "ok": 2
+  },
+  "objects": {
+   "same": 1,
+   "same value, different name": 1,
+   "same name, different value": 1,
+   "missing on B": 3
+  },
+  "b_rules": {
+   "also on A": 2
+  },
+  "b_nat": {
+   "also on A (other public IP)": 2
+  },
+  "b_objects": {},
+  "held_rules": {},
+  "l7_actions": {
+   "action unknown (L7)": 1
+  }
+ },
+ "summary": [
+  {
+   "subnet": "10.10.0.0/24",
+   "scope": "VLAN 10 inside",
+   "rules_any": {
+    "partial": 1,
+    "shadowed": 2,
+    "missing": 1
+   },
+   "pat": {
+    "A missing": 1,
+    "B missing": 1
+   },
+   "routing": {
+    "ok": 1
+   },
+   "b_rules_any": {
+    "also on A": 2
+   }
+  },
+  {
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "rules": {
+    "partial": 1,
+    "shadowed": 2,
+    "missing": 1
+   },
+   "nat": {
+    "match": 1,
+    "inactive on B": 1,
+    "missing": 2
+   },
+   "pat": {
+    "A covered": 1,
+    "B missing": 1
+   },
+   "inbound": {
+    "nat ok, rule partial": 1,
+    "nat inactive on B, rule missing": 1
+   },
+   "routing": {
+    "ok": 1
+   },
+   "objects": {
+    "same": 1,
+    "same value, different name": 1,
+    "same name, different value": 1,
+    "missing on B": 3
+   },
+   "b_rules": {
+    "also on A": 2
+   },
+   "b_nat": {
+    "also on A (other public IP)": 2
+   }
+  }
+ ],
+ "planned": [],
+ "mode": "1:1",
+ "detected": {
+  "roles_a": {
+   "outside": [
+    "outside",
+    "default route"
+   ],
+   "inside": [
+    "inside",
+    "no default route, no public NAT"
+   ]
+  },
+  "roles_b": {
+   "OUTSIDE": [
+    "outside",
+    "default route"
+   ],
+   "INSIDE": [
+    "inside",
+    "no default route, no public NAT"
+   ]
+  },
+  "interface_map": [
+   {
+    "a": "outside",
+    "a_role": "outside",
+    "a_reason": "default route",
+    "b": "OUTSIDE",
+    "b_role": "outside",
+    "how": "role",
+    "flag": "",
+    "note": ""
+   },
+   {
+    "a": "inside",
+    "a_role": "inside",
+    "a_reason": "no default route, no public NAT",
+    "b": "INSIDE",
+    "b_role": "inside",
+    "how": "role",
+    "flag": "",
+    "note": ""
+   }
+  ],
+  "public_a": {
+   "interfaces": [
+    "198.51.100.0/24"
+   ],
+   "mapped": [
+    "198.51.100.10/31",
+    "198.51.100.20/32"
+   ],
+   "mapped_count": 3,
+   "ranges": [
+    "198.51.100.0/24"
+   ]
+  },
+  "public_b": {
+   "interfaces": [
+    "203.0.113.0/24"
+   ],
+   "mapped": [
+    "203.0.113.10/31"
+   ],
+   "mapped_count": 2,
+   "ranges": [
+    "203.0.113.0/24"
+   ]
+  },
+  "site_type": "standard",
+  "scope_candidates": [
+   {
+    "subnet": "10.10.0.0/24",
+    "ifc": "inside",
+    "kind": "connected",
+    "name": "VLAN 10 inside"
+   },
+   {
+    "subnet": "10.20.0.0/24",
+    "ifc": "inside",
+    "kind": "static",
+    "name": "LAN20"
+   }
+  ],
+  "dynamic_routing_b": [],
+  "dynamic_routing_a": [],
+  "mode": "1:1",
+  "chain": null,
+  "prefixes": [
+   {
+    "prefix": "10.10.0.0/24",
+    "where": "A connected inside",
+    "ifc": "A:inside"
+   },
+   {
+    "prefix": "198.51.100.0/24",
+    "where": "A connected outside",
+    "ifc": "A:outside"
+   },
+   {
+    "prefix": "10.20.0.0/24",
+    "where": "A static inside",
+    "ifc": "A:inside"
+   },
+   {
+    "prefix": "203.0.113.0/24",
+    "where": "B connected OUTSIDE",
+    "ifc": "OUTSIDE"
+   },
+   {
+    "prefix": "10.10.0.0/24",
+    "where": "B connected INSIDE",
+    "ifc": "INSIDE"
+   },
+   {
+    "prefix": "10.20.0.0/24",
+    "where": "B static INSIDE",
+    "ifc": "INSIDE"
+   }
+  ],
+  "scope_warnings": []
+ },
+ "profile_used": {
+  "name": "default",
+  "type": "standard",
+  "scope": [
+   "10.10.0.0/24",
+   "10.20.0.0/24"
+  ],
+  "scope_names": {
+   "10.10.0.0/24": "VLAN 10 inside",
+   "10.20.0.0/24": "LAN20"
+  },
+  "interface_map": {
+   "outside": "OUTSIDE",
+   "inside": "INSIDE"
+  },
+  "outside_a": [
+   "outside"
+  ],
+  "outside_b": [
+   "OUTSIDE"
+  ],
+  "public_a": [
+   "198.51.100.0/24"
+  ],
+  "public_b": [
+   "203.0.113.0/24"
+  ],
+  "public_map": {},
+  "public_pool_b": [],
+  "rename": [],
+  "zone_map": {},
+  "fmc": {},
+  "scope_add": {},
+  "roles_a": {},
+  "whatif": {},
+  "rule_actions": {},
+  "l7_suspect": "(?i)\\b(block|blocklist|blocked|deny|drop|unwanted)\\b|trojan|stratum miner",
+  "row_state": {},
+  "names": {},
+  "finding_state": {},
+  "decision_state": {}
+ },
+ "warnings": [
+  [],
+  []
+ ],
+ "names": {
+  "A": "edge-a",
+  "B": "edge-b",
+  "A1": "edge-a",
+  "A2": "edge-a",
+  "A_short": "edge-a",
+  "B_short": "edge-b"
+ },
+ "folded_rules": [
+  "Web2-In"
+ ],
+ "glossary": {
+  "covered": "edge-b permits all of this traffic.",
+  "partial": "edge-b permits only part of this traffic (some addresses or ports are missing).",
+  "shadowed": "An earlier edge-b rule blocks this traffic before a permit is reached.",
+  "denied": "edge-b has a rule that blocks this traffic.",
+  "missing": "edge-b has no rule for this traffic; its default action drops it.",
+  "wrong way": "edge-b would send this subnet to the internet, not inside.",
+  "no route on B": "edge-b has no route for this subnet.",
+  "other inside interface": "edge-b routes this subnet inside, but out of a different inside interface.",
+  "ok": "Ready.",
+  "over-permitted": "edge-b allows more than edge-a.",
+  "over-permitted (partial)": "edge-b allows part of this traffic that edge-a does not.",
+  "also on A": "edge-a allows this traffic too.",
+  "inactive on B": "edge-b has the NAT but it is disabled.",
+  "match": "edge-b has the same NAT.",
+  "mapped conflict": "The public IP is already used by a different inside host on edge-b.",
+  "mapped reuse": "edge-b uses the same public IP as edge-a (only valid when both share the public subnet).",
+  "mapped outside B public": "edge-b's NAT uses a public IP outside edge-b's public ranges.",
+  "differs": "edge-b has a NAT for this host, but with different addresses.",
+  "action unknown (L7)": "The rule has application/URL/user conditions; its real action (allow or block) is only in FMC.",
+  "blocked (L7)": "Marked as a block rule: left out of the compare and the plan.",
+  "B only": "Only edge-b has this.",
+  "same name, different value": "The object exists on both, with different addresses."
+ },
+ "findings": [
+  {
+   "id": "F-18529b1d21e9",
+   "key": "18529b1d21e9",
+   "category": "pat",
+   "order": 1,
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scope": "LAN20",
+   "what": "edge-b has no outbound PAT for NET_10.20.0.0_24 (LAN20). edge-a translates all of it today (first match: RANGE1 -> PAT_LAN20 line 56; LAN20 -> interface line 54).",
+   "why": "Hosts in LAN20 cannot reach the internet through edge-b.",
+   "evidence": [
+    {
+     "device": "edge-a",
+     "line": 56,
+     "text": "object network RANGE1 / nat (inside,outside) dynamic PAT_LAN20"
+    },
+    {
+     "device": "edge-a",
+     "line": 54,
+     "text": "nat (inside,outside) after-auto source dynamic LAN20 interface"
+    },
+    {
+     "device": "edge-b",
+     "line": 0,
+     "text": "(no dynamic NAT covering NET_10.20.0.0_24)"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Devices > NAT > <edge-b NAT policy> > Add Rule: NAT Rule Manual, Type Dynamic, Insert In Category After Auto NAT; Interface Objects: Source INSIDE, Destination OUTSIDE; Translation: Original Source NET_10.20.0.0_24, Translated Source Destination Interface IP (OUTSIDE interface PAT, like its existing PAT rules)."
+    ],
+    "cli": [
+     "nat (INSIDE,OUTSIDE) after-auto source dynamic NET_10.20.0.0_24 interface"
+    ],
+    "objects": [
+     {
+      "name": "NET_10.20.0.0_24",
+      "type": "Network",
+      "value": "10.20.0.0/24",
+      "cli": [
+       "object network NET_10.20.0.0_24",
+       " subnet 10.20.0.0 255.255.255.0"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.20.0.1 40000 8.8.8.8 443",
+    "show xlate local 10.20.0.1"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "no outbound PAT on edge-b",
+   "fmc_group": "NAT",
+   "pat_sources": [
+    "NET_10.20.0.0_24"
+   ],
+   "pat_mode": "interface",
+   "pat_dedicated": [
+    "198.51.100.20"
+   ],
+   "pat_pool": 0,
+   "n": 1
+  },
+  {
+   "id": "F-6a7b05043c68",
+   "key": "6a7b05043c68",
+   "category": "pat",
+   "order": 1,
+   "scopes": [
+    "10.10.0.0/24"
+   ],
+   "scope": "VLAN 10 inside",
+   "what": "edge-b has no outbound PAT for NET_10.10.0.0_24 (VLAN 10 inside). edge-a does not translate it either.",
+   "why": "Hosts in VLAN 10 inside cannot reach the internet through edge-b.",
+   "evidence": [
+    {
+     "device": "edge-b",
+     "line": 0,
+     "text": "(no dynamic NAT covering NET_10.10.0.0_24)"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Devices > NAT > <edge-b NAT policy> > Add Rule: NAT Rule Manual, Type Dynamic, Insert In Category After Auto NAT; Interface Objects: Source INSIDE, Destination OUTSIDE; Translation: Original Source NET_10.10.0.0_24, Translated Source Destination Interface IP (OUTSIDE interface PAT, like its existing PAT rules)."
+    ],
+    "cli": [
+     "nat (INSIDE,OUTSIDE) after-auto source dynamic NET_10.10.0.0_24 interface"
+    ],
+    "objects": [
+     {
+      "name": "NET_10.10.0.0_24",
+      "type": "Network",
+      "value": "10.10.0.0/24",
+      "cli": [
+       "object network NET_10.10.0.0_24",
+       " subnet 10.10.0.0 255.255.255.0"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.10.0.1 40000 8.8.8.8 443",
+    "show xlate local 10.10.0.1"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "missing",
+   "plain_status": "no outbound PAT on edge-b",
+   "fmc_group": "NAT",
+   "pat_sources": [
+    "NET_10.10.0.0_24"
+   ],
+   "pat_mode": "interface",
+   "pat_dedicated": [],
+   "pat_pool": 0,
+   "n": 2
+  },
+  {
+   "id": "F-49a434ec5cc3",
+   "key": "49a434ec5cc3",
+   "category": "inbound",
+   "order": 2,
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scope": "LAN20",
+   "what": "WEB1 (10.20.0.10/32) is published at edge-a on 198.51.100.10 tcp 80, 443. edge-b has the NAT but an access rule for only part of the ports.",
+   "why": "During an edge-a internet outage this server is unreachable from the internet.",
+   "evidence": [
+    {
+     "device": "edge-a",
+     "line": 52,
+     "text": "nat (inside,outside) source static WEB1 PUB_WEB1"
+    },
+    {
+     "device": "edge-a",
+     "line": 41,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object-group INNER object-group WEBPORTS rule-id 100"
+    },
+    {
+     "device": "edge-b",
+     "line": 27,
+     "text": "nat (INSIDE,OUTSIDE) source static WEB1 B_PUB_WEB1"
+    },
+    {
+     "device": "edge-b",
+     "line": 22,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE host 10.20.0.10 eq www rule-id 201"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > <edge-b access policy> > Add Rule (Mandatory section, at the top, in edge-a's rule order): Name \"Web-In\", Action Allow, Zones: Source OUTSIDE -> Destination INSIDE, Networks: Source any, Destination WEB1, INNER, Ports: WEBPORTS, Logging: at end of connection.",
+     "DNS: failover record for WEB1: 198.51.100.10 -> 203.0.113.10 (lower the TTL first)."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB1 eq 80",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB1 eq 443",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object-group INNER eq 80",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object-group INNER eq 443"
+    ],
+    "objects": [
+     {
+      "name": "INNER",
+      "type": "Group",
+      "value": "group of WEB1, 10.20.0.12",
+      "cli": [
+       "object-group network INNER",
+       " network-object object WEB1",
+       " network-object host 10.20.0.12"
+      ]
+     },
+     {
+      "name": "WEBPORTS",
+      "type": "Port",
+      "value": "tcp 80, 443",
+      "cli": []
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input OUTSIDE tcp 8.8.8.8 40000 203.0.113.10 80",
+    "show xlate global 203.0.113.10",
+    "show nat detail | include WEB1"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "nat ok, rule partial",
+   "plain_status": "edge-b has the NAT and an access rule for only part of the ports",
+   "fmc_group": "Access Control",
+   "host": "WEB1",
+   "real": "10.20.0.10/32",
+   "a_public": "198.51.100.10",
+   "b_public": "203.0.113.10",
+   "ports": "tcp 80, 443",
+   "dns_change": true,
+   "suggest": "",
+   "nat_status": "match",
+   "rule_status": "partial",
+   "acp_rules": [
+    "Web-In"
+   ],
+   "folded_rules": [
+    "Web-In"
+   ],
+   "acp_specs": [
+    {
+     "name": "Web-In",
+     "si": [
+      "OUTSIDE"
+     ],
+     "di": [
+      "INSIDE"
+     ],
+     "src": [
+      "any"
+     ],
+     "dst": [
+      "WEB1",
+      "INNER"
+     ],
+     "ports": [
+      "WEBPORTS"
+     ],
+     "seq": 1,
+     "src_any": true,
+     "pos": 1
+    }
+   ],
+   "objects_on_b": [
+    "WEB1"
+   ],
+   "n": 3
+  },
+  {
+   "id": "F-e589c821ae2f",
+   "key": "e589c821ae2f",
+   "category": "inbound",
+   "order": 2,
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scope": "LAN20",
+   "what": "WEB2 (10.20.0.11/32) is published at edge-a on 198.51.100.11 tcp 443. edge-b has the NAT but it is disabled and no access rule.",
+   "why": "During an edge-a internet outage this server is unreachable from the internet.",
+   "evidence": [
+    {
+     "device": "edge-a",
+     "line": 53,
+     "text": "nat (inside,outside) source static WEB2 PUB_WEB2 description web two"
+    },
+    {
+     "device": "edge-a",
+     "line": 47,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside host 10.20.0.11 eq 443 rule-id 103"
+    },
+    {
+     "device": "edge-b",
+     "line": 28,
+     "text": "nat (INSIDE,OUTSIDE) source static WEB-ONE-RENAMED B_PUB_WEB2 inactive"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Devices > NAT > <edge-b NAT policy> > edit the rule for WEB-ONE-RENAMED -> B_PUB_WEB2: tick Enable.",
+     "Policies > Access Control > <edge-b access policy> > Add Rule (Mandatory section, at the top, in edge-a's rule order): Name \"Web2-In\", Action Allow, Zones: Source OUTSIDE -> Destination INSIDE, Networks: Source any, Destination WEB2, Ports: TCP 443, Logging: at end of connection.",
+     "DNS: failover record for WEB2: 198.51.100.11 -> 203.0.113.11 (lower the TTL first)."
+    ],
+    "cli": [
+     "nat (INSIDE,OUTSIDE) source static WEB-ONE-RENAMED B_PUB_WEB2 inactive   (remove \"inactive\")",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB2 eq 443"
+    ],
+    "objects": [
+     {
+      "name": "WEB2",
+      "type": "Host",
+      "value": "10.20.0.11",
+      "cli": [
+       "object network WEB2",
+       " host 10.20.0.11"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input OUTSIDE tcp 8.8.8.8 40000 203.0.113.11 443",
+    "show xlate global 203.0.113.11",
+    "show nat detail | include WEB2"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "nat inactive on B, rule missing",
+   "plain_status": "edge-b has the NAT but it is disabled and no access rule",
+   "fmc_group": "NAT",
+   "host": "WEB2",
+   "real": "10.20.0.11/32",
+   "a_public": "198.51.100.11",
+   "b_public": "203.0.113.11",
+   "ports": "tcp 443",
+   "dns_change": true,
+   "suggest": "",
+   "nat_status": "inactive on B",
+   "rule_status": "missing",
+   "acp_rules": [
+    "Web2-In"
+   ],
+   "folded_rules": [
+    "Web2-In"
+   ],
+   "acp_specs": [
+    {
+     "name": "Web2-In",
+     "si": [
+      "OUTSIDE"
+     ],
+     "di": [
+      "INSIDE"
+     ],
+     "src": [
+      "any"
+     ],
+     "dst": [
+      "WEB2"
+     ],
+     "ports": [
+      "TCP 443"
+     ],
+     "seq": 4,
+     "src_any": true,
+     "pos": 4
+    }
+   ],
+   "n": 4
+  },
+  {
+   "id": "F-4cf1777c6b1c",
+   "key": "4cf1777c6b1c",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scope": "LAN20",
+   "what": "edge-a rule \"Lan-Out\" (1 line) allows LAN20 -> any (ip); edge-b blocks it with an earlier rule (earlier B deny Block-8000).",
+   "why": "When edge-b takes over, this traffic is dropped.",
+   "evidence": [
+    {
+     "device": "edge-a",
+     "line": 43,
+     "text": "access-list CSM_FW_ACL_ advanced permit ip ifc inside object LAN20 ifc outside any rule-id 101"
+    },
+    {
+     "device": "edge-b",
+     "line": 20,
+     "text": "access-list CSM_FW_ACL_ advanced deny tcp ifc INSIDE any ifc OUTSIDE any range 8000 8010 rule-id 200"
+    },
+    {
+     "device": "edge-b",
+     "line": 24,
+     "text": "access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE 10.20.0.0 255.255.255.0 ifc OUTSIDE any rule-id 202"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > <edge-b access policy> > Add Rule (Mandatory section, at the top, in edge-a's rule order): Name \"Lan-Out\", Action Allow, Zones: Source INSIDE -> Destination OUTSIDE, Networks: Source LAN20, Destination any, Ports: any, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE object LAN20 ifc OUTSIDE any"
+    ],
+    "objects": [
+     {
+      "name": "LAN20",
+      "type": "Network",
+      "value": "10.20.0.0/24",
+      "cli": [
+       "object network LAN20",
+       " subnet 10.20.0.0 255.255.255.0"
+      ]
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.20.0.1 40000 192.0.2.1 443"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "shadowed",
+   "plain_status": "An earlier edge-b rule blocks this traffic before a permit is reached.",
+   "fmc_group": "Access Control",
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "flags": [],
+   "rule": "Lan-Out",
+   "lines": 1,
+   "acp_rules": [
+    "Lan-Out"
+   ],
+   "acp_specs": [
+    {
+     "name": "Lan-Out",
+     "si": [
+      "INSIDE"
+     ],
+     "di": [
+      "OUTSIDE"
+     ],
+     "src": [
+      "LAN20"
+     ],
+     "dst": [
+      "any"
+     ],
+     "ports": [],
+     "seq": 2,
+     "src_any": false,
+     "pos": 2
+    }
+   ],
+   "n": 5
+  },
+  {
+   "id": "F-0d51319c4510",
+   "key": "0d51319c4510",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scope": "LAN20",
+   "what": "edge-a rule \"Mixed\" (1 line) allows LAN20 -> any (MIXED); edge-b blocks it with an earlier rule (earlier B deny Block-8000).",
+   "why": "When edge-b takes over, this traffic is dropped.",
+   "evidence": [
+    {
+     "device": "edge-a",
+     "line": 45,
+     "text": "access-list CSM_FW_ACL_ advanced permit object-group MIXED ifc inside object LAN20 ifc outside any rule-id 102"
+    },
+    {
+     "device": "edge-b",
+     "line": 20,
+     "text": "access-list CSM_FW_ACL_ advanced deny tcp ifc INSIDE any ifc OUTSIDE any range 8000 8010 rule-id 200"
+    },
+    {
+     "device": "edge-b",
+     "line": 24,
+     "text": "access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE 10.20.0.0 255.255.255.0 ifc OUTSIDE any rule-id 202"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > <edge-b access policy> > Add Rule (Mandatory section, at the top, in edge-a's rule order): Name \"Mixed\", Action Allow, Zones: Source INSIDE -> Destination OUTSIDE, Networks: Source LAN20, Destination any, Ports: MIXED, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc INSIDE object LAN20 ifc OUTSIDE any range 8000 8010",
+     "access-list CSM_FW_ACL_ advanced permit udp ifc INSIDE object LAN20 ifc OUTSIDE any eq 53"
+    ],
+    "objects": [
+     {
+      "name": "LAN20",
+      "type": "Network",
+      "value": "10.20.0.0/24",
+      "cli": [
+       "object network LAN20",
+       " subnet 10.20.0.0 255.255.255.0"
+      ]
+     },
+     {
+      "name": "MIXED",
+      "type": "Port",
+      "value": "tcp 8000-8010; udp 53",
+      "cli": []
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input INSIDE tcp 10.20.0.1 40000 192.0.2.1 8000"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "shadowed",
+   "plain_status": "An earlier edge-b rule blocks this traffic before a permit is reached.",
+   "fmc_group": "Access Control",
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "flags": [],
+   "rule": "Mixed",
+   "lines": 1,
+   "acp_rules": [
+    "Mixed"
+   ],
+   "acp_specs": [
+    {
+     "name": "Mixed",
+     "si": [
+      "INSIDE"
+     ],
+     "di": [
+      "OUTSIDE"
+     ],
+     "src": [
+      "LAN20"
+     ],
+     "dst": [
+      "any"
+     ],
+     "ports": [
+      "MIXED"
+     ],
+     "seq": 3,
+     "src_any": false,
+     "pos": 3
+    }
+   ],
+   "n": 6
+  },
+  {
+   "id": "F-138a542f9828",
+   "key": "138a542f9828",
+   "category": "rules",
+   "order": 3,
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scope": "LAN20",
+   "what": "edge-a rule \"Web-In\" (1 line) allows any -> INNER (tcp WEBPORTS); edge-b permits only part of it.",
+   "why": "When edge-b takes over, this traffic is dropped in part.",
+   "evidence": [
+    {
+     "device": "edge-a",
+     "line": 41,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object-group INNER object-group WEBPORTS rule-id 100"
+    },
+    {
+     "device": "edge-b",
+     "line": 22,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE host 10.20.0.10 eq www rule-id 201"
+    },
+    {
+     "device": "edge-b",
+     "line": 22,
+     "text": "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE host 10.20.0.10 eq www rule-id 201"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Policies > Access Control > <edge-b access policy> > Add Rule (Mandatory section, at the top, in edge-a's rule order): Name \"Web-In\", Action Allow, Zones: Source OUTSIDE -> Destination INSIDE, Networks: Source any, Destination WEB1, INNER, Ports: WEBPORTS, Logging: at end of connection."
+    ],
+    "cli": [
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB1 eq 80",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB1 eq 443",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object-group INNER eq 80",
+     "access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object-group INNER eq 443"
+    ],
+    "objects": [
+     {
+      "name": "INNER",
+      "type": "Group",
+      "value": "group of WEB1, 10.20.0.12",
+      "cli": [
+       "object-group network INNER",
+       " network-object object WEB1",
+       " network-object host 10.20.0.12"
+      ]
+     },
+     {
+      "name": "WEBPORTS",
+      "type": "Port",
+      "value": "tcp 80, 443",
+      "cli": []
+     }
+    ]
+   },
+   "verify": [
+    "packet-tracer input OUTSIDE tcp 192.0.2.1 40000 10.20.0.10 80"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "partial",
+   "plain_status": "edge-b permits only part of this traffic (some addresses or ports are missing).",
+   "fmc_group": "Access Control",
+   "scopes_any": [
+    "10.10.0.0/24"
+   ],
+   "flags": [],
+   "rule": "Web-In",
+   "lines": 1,
+   "acp_rules": [
+    "Web-In"
+   ],
+   "acp_specs": [
+    {
+     "name": "Web-In",
+     "si": [
+      "OUTSIDE"
+     ],
+     "di": [
+      "INSIDE"
+     ],
+     "src": [
+      "any"
+     ],
+     "dst": [
+      "WEB1",
+      "INNER"
+     ],
+     "ports": [
+      "WEBPORTS"
+     ],
+     "seq": 1,
+     "src_any": true,
+     "pos": 1
+    }
+   ],
+   "objects_on_b": [
+    "WEB1"
+   ],
+   "n": 7
+  },
+  {
+   "id": "F-233b4bf3e8b0",
+   "key": "233b4bf3e8b0",
+   "category": "objects",
+   "order": 4,
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "scope": "LAN20",
+   "what": "Object LAN20 is 10.20.0.0/24 on edge-a but 10.20.0.0/23 on edge-b.",
+   "why": "Rules that use LAN20 on edge-b match different addresses than on edge-a.",
+   "evidence": [
+    {
+     "device": "edge-a",
+     "line": 15,
+     "text": "object network LAN20"
+    }
+   ],
+   "fix": {
+    "fmc": [
+     "Objects > Object Management > Network > LAN20: check which value is right; change it or use a new name."
+    ],
+    "cli": [],
+    "objects": []
+   },
+   "verify": [
+    "show running-config object id LAN20"
+   ],
+   "state": "open",
+   "reason": "",
+   "status": "same name, different value",
+   "plain_status": "The object exists on both, with different addresses.",
+   "fmc_group": "Objects",
+   "n": 8
+  }
+ ],
+ "decisions": [
+  {
+   "id": "D-pat-18529b1d21e9",
+   "kind": "PAT address",
+   "title": "LAN20 outbound PAT",
+   "text": "edge-a PATs NET_10.20.0.0_24 to dedicated address 198.51.100.20. Default on edge-b: its OUTSIDE interface (like its existing PAT). Choose \"match A's address\" only if partners allow-list that address (costs 1 public IP).",
+   "options": [
+    "edge-b interface (default)",
+    "match A's address"
+   ],
+   "scopes": [
+    "10.20.0.0/24"
+   ],
+   "finding": "18529b1d21e9",
+   "blocking": false,
+   "default": "edge-b interface (default)",
+   "choice": "edge-b interface (default)",
+   "open": false
+  }
+ ],
+ "readiness": [
+  {
+   "subnet": "10.10.0.0/24",
+   "scope": "VLAN 10 inside",
+   "lines": [
+    {
+     "name": "Routing",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Outbound internet (PAT)",
+     "actions": 1,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "Published servers (inbound)",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Access rules",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "DNS changes",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Public IPs",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": "0 new needed: (a) 0 published servers, (b) 0 outbound identity (0 NATs, 0 addresses, not kept), (c) 0 PAT"
+    }
+   ],
+   "actions": 1,
+   "decisions": 0,
+   "ready": false,
+   "verdict": "edge-b can take over VLAN 10 inside: no - 1 actions, 0 decisions"
+  },
+  {
+   "subnet": "10.20.0.0/24",
+   "scope": "LAN20",
+   "lines": [
+    {
+     "name": "Routing",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": ""
+    },
+    {
+     "name": "Outbound internet (PAT)",
+     "actions": 1,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "Published servers (inbound)",
+     "actions": 2,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "Access rules",
+     "actions": 4,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "DNS changes",
+     "actions": 2,
+     "decisions": 0,
+     "state": "Action needed",
+     "note": ""
+    },
+    {
+     "name": "Public IPs",
+     "actions": 0,
+     "decisions": 0,
+     "state": "Ready",
+     "note": "0 new needed: (a) 0 published servers, (b) 0 outbound identity (0 NATs, 0 addresses, not kept), (c) 0 PAT"
+    }
+   ],
+   "actions": 9,
+   "decisions": 0,
+   "ready": false,
+   "verdict": "edge-b can take over LAN20: no - 9 actions, 0 decisions"
+  }
+ ],
+ "plan": {
+  "groups": [
+   {
+    "name": "Objects",
+    "count": 0,
+    "items": []
+   },
+   {
+    "name": "Routing",
+    "count": 0,
+    "items": []
+   },
+   {
+    "name": "NAT",
+    "count": 0,
+    "items": []
+   },
+   {
+    "name": "Access Control",
+    "count": 0,
+    "items": []
+   },
+   {
+    "name": "DNS",
+    "count": 0,
+    "items": []
+   }
+  ],
+  "total": 0,
+  "findings": 0,
+  "public_ips": {
+   "a": 0,
+   "b": 0,
+   "c": 0,
+   "total": 0
+  },
+  "public_text": "0 new edge-b public IPs for these changes: (a) 0 published servers, (b) 0 outbound identities, (c) 0 PAT addresses"
+ }
+}

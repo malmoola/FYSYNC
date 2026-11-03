@@ -1,0 +1,2 @@
+id,scope,status,object,real,a_public,b_public,ports,a_rules,b_rules
+I1,DC-NET,ready,WEB,10.50.1.10/32,198.51.100.10,203.0.113.10,tcp/443,A2:Web-443 ∩ A1:Web-In,Web-443

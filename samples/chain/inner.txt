@@ -1,0 +1,37 @@
+: Saved
+NGFW Version 7.4.0
+hostname chain-inner
+interface Port-channel1
+ nameif DC-OUT
+ security-level 0
+ ip address 10.0.0.2 255.255.255.248
+interface Port-channel2
+ nameif DC-IN
+ security-level 0
+ ip address 10.50.0.1 255.255.255.0
+object network DC-NET
+ subnet 10.50.0.0 255.255.0.0
+object network CAMPUS-NET
+ subnet 10.60.0.0 255.255.0.0
+object network WEB
+ host 10.50.1.10
+object network MAIL
+ host 10.50.1.30
+object network APP40
+ host 10.50.1.40
+access-list CSM_FW_ACL_ remark rule-id 201: ACCESS POLICY: DC - Mandatory
+access-list CSM_FW_ACL_ remark rule-id 201: RULE: Web-443
+access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object WEB eq https rule-id 201
+access-list CSM_FW_ACL_ remark rule-id 202: RULE: DC-Any
+access-list CSM_FW_ACL_ advanced permit ip ifc DC-IN object DC-NET ifc DC-OUT any rule-id 202
+access-list CSM_FW_ACL_ remark rule-id 203: RULE: Campus-RDP
+access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT object CAMPUS-NET ifc DC-IN object DC-NET eq 3389 rule-id 203
+access-list CSM_FW_ACL_ remark rule-id 204: RULE: Mail-In
+access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object MAIL eq smtp rule-id 204
+access-list CSM_FW_ACL_ remark rule-id 205: RULE: App40
+access-list CSM_FW_ACL_ advanced permit tcp ifc DC-OUT any ifc DC-IN object APP40 eq 8443 rule-id 205
+access-list CSM_FW_ACL_ remark rule-id 9: L4 RULE: DEFAULT ACTION RULE
+access-list CSM_FW_ACL_ advanced deny ip any any rule-id 9
+access-group CSM_FW_ACL_ global
+route DC-OUT 0.0.0.0 0.0.0.0 10.0.0.1 1
+route DC-IN 10.50.0.0 255.255.0.0 10.50.0.254 1

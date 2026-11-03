@@ -1,0 +1,35 @@
+: Saved
+NGFW Version 7.4.0
+hostname chain-target
+interface Ethernet1/1
+ nameif OUTSIDE
+ security-level 0
+ ip address 203.0.113.2 255.255.255.0
+interface Ethernet1/2
+ nameif INSIDE
+ security-level 0
+ ip address 10.9.0.1 255.255.255.248
+object network DC-NET
+ subnet 10.50.0.0 255.255.0.0
+object network WEB-SERVER
+ host 10.50.1.10
+object network PUB_WEB
+ host 203.0.113.10
+object network JUMP
+ host 10.50.1.20
+access-list CSM_FW_ACL_ remark rule-id 301: ACCESS POLICY: TARGET - Mandatory
+access-list CSM_FW_ACL_ remark rule-id 301: RULE: Web-443
+access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB-SERVER eq https rule-id 301
+access-list CSM_FW_ACL_ remark rule-id 302: RULE: Web-80
+access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object WEB-SERVER eq www rule-id 302
+access-list CSM_FW_ACL_ remark rule-id 303: RULE: DC-Out
+access-list CSM_FW_ACL_ advanced permit ip ifc INSIDE object DC-NET ifc OUTSIDE any rule-id 303
+access-list CSM_FW_ACL_ remark rule-id 304: RULE: Jump-SSH
+access-list CSM_FW_ACL_ advanced permit tcp ifc OUTSIDE any ifc INSIDE object JUMP eq ssh rule-id 304
+access-list CSM_FW_ACL_ remark rule-id 9: L4 RULE: DEFAULT ACTION RULE
+access-list CSM_FW_ACL_ advanced deny ip any any rule-id 9
+access-group CSM_FW_ACL_ global
+nat (INSIDE,OUTSIDE) source static WEB-SERVER PUB_WEB
+nat (INSIDE,OUTSIDE) after-auto source dynamic DC-NET interface
+route OUTSIDE 0.0.0.0 0.0.0.0 203.0.113.1 1
+route INSIDE 10.50.0.0 255.255.0.0 10.9.0.2 1

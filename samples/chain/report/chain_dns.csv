@@ -1,0 +1,2 @@
+scope,host,description,real_ip,a_public_ip,b_public_ip,ports,b_status
+DC-NET,WEB,,10.50.1.10/32,198.51.100.10,203.0.113.10,tcp/443,match

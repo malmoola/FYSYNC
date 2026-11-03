@@ -1,0 +1,3 @@
+id,scope,status,kind,b_ifc,real_ref,real,b_mapped,b_inactive,a_nat
+BN1,DC-NET,also on A (other public IP),static,INSIDE->OUTSIDE,WEB-SERVER,10.50.1.10/32,203.0.113.10/32,False,#1 WEB
+BN2,"DC-NET, A2:DC-IN",also on A,dynamic PAT,INSIDE->OUTSIDE,DC-NET,10.50.0.0/16,interface,False,#2 DC-NET

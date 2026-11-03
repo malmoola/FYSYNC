@@ -1,0 +1,5 @@
+scope,subnet,rules,rules_any,b_rules,b_rules_any,nat,b_nat,inbound,routing,objects,b_objects
+A1:inside,10.0.0.0/29,missing 4,,,also on A 2; over-permitted 2,,,,wrong way 1,,
+DC-NET,10.50.0.0/16,covered 2; missing 6,,also on A 2; over-permitted 2,,match 2,also on A 1; also on A (other public IP) 1,ready 1,ok 1,"missing on B 2; same 2; same value, different name 1",
+CAMPUS-NET,10.60.0.0/16,missing 6,,,also on A 2; over-permitted 2,missing 1,,,wrong way 1,missing on B 1,
+A2:DC-IN,10.50.0.0/24,covered 1; missing 2,,also on A 1,also on A 1; over-permitted 2,match 1,also on A 1,,ok 1,same 1,
