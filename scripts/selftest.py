@@ -165,6 +165,8 @@ def main():
         rec('offline install', st.startswith(('ok', 'not run')), st)
     rc, ver = run([py, '-c', 'import fwsync, sys; print(fwsync.__version__, sys.version.split()[0])'])
     rec('fwsync importable', rc == 0, ver.strip()[-200:])
+    erc, eout = run([py, '-c', 'import fastapi, uvicorn, multipart, requests, yaml, pytest; print("ok")'])
+    rec('extras web,yaml,fmc,test', erc == 0, eout.strip()[-200:])
     if rc == 0:
         ok, detail, text = check_suite(py, root)
         rec('test suite', ok, detail)

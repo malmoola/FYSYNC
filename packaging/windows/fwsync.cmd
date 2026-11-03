@@ -7,7 +7,7 @@ set "HERE=%~dp0"
 set "ROOT=%HERE%"
 if not exist "%ROOT%fwsync\__init__.py" for %%I in ("%HERE%..\..") do set "ROOT=%%~fI\"
 if not exist "%ROOT%packaging\windows\setup.cmd" goto :missing
-call "%ROOT%packaging\windows\setup.cmd" web,yaml,fmc
+call "%ROOT%packaging\windows\setup.cmd" "web,yaml,fmc"
 if errorlevel 1 goto :end
 echo.
 echo  fwsync is starting; your browser opens in a moment.

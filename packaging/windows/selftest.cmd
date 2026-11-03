@@ -11,7 +11,7 @@ if exist "%ROOT%packaging\windows\setup.cmd" goto :setup
 echo fwsync: files are missing. Extract the whole zip first, then run selftest.cmd from the extracted folder.
 goto :end
 :setup
-call "%ROOT%packaging\windows\setup.cmd" web,yaml,fmc,test
+call "%ROOT%packaging\windows\setup.cmd" "web,yaml,fmc,test"
 set "RC=%ERRORLEVEL%"
 if "%RC%"=="0" goto :run
 > "%ROOT%selftest-result.txt" echo fwsync selftest FAILED: offline install
