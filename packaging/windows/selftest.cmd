@@ -5,19 +5,19 @@ setlocal EnableExtensions
 title fwsync selftest
 set "HERE=%~dp0"
 set "ROOT=%HERE%"
+set "RC=2"
 if not exist "%ROOT%fwsync\__init__.py" for %%I in ("%HERE%..\..") do set "ROOT=%%~fI\"
-if not exist "%ROOT%packaging\windows\setup.cmd" (
-  echo fwsync: files are missing. Extract the whole zip first, then run selftest.cmd from the extracted folder.
-  set "RC=2"
-  goto :end
-)
+if exist "%ROOT%packaging\windows\setup.cmd" goto :setup
+echo fwsync: files are missing. Extract the whole zip first, then run selftest.cmd from the extracted folder.
+goto :end
+:setup
 call "%ROOT%packaging\windows\setup.cmd" web,yaml,fmc,test
 set "RC=%ERRORLEVEL%"
-if not "%RC%"=="0" (
-  echo fwsync selftest FAILED: offline install> "%ROOT%selftest-result.txt"
-  echo offline install            FAIL  %INSTALL_STATUS%>> "%ROOT%selftest-result.txt"
-  goto :end
-)
+if "%RC%"=="0" goto :run
+> "%ROOT%selftest-result.txt" echo fwsync selftest FAILED: offline install
+>> "%ROOT%selftest-result.txt" echo offline install              FAIL  %INSTALL_STATUS%
+goto :end
+:run
 "%PY%" "%ROOT%scripts\selftest.py" --root "%ROOT:~0,-1%" --kind %KIND% --install-status "%INSTALL_STATUS%"
 set "RC=%ERRORLEVEL%"
 :end

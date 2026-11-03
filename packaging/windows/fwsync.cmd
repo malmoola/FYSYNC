@@ -14,10 +14,9 @@ echo  fwsync is starting; your browser opens in a moment.
 echo  Keep this window open while you use fwsync. Press Ctrl-C (then Y) or close the window to stop it.
 echo.
 "%PY%" -m fwsync web %*
-if errorlevel 1 (
-  echo.
-  echo  fwsync stopped with an error. If the port was in use, close the other fwsync window and start again.
-)
+if not errorlevel 1 goto :end
+echo.
+echo  fwsync stopped with an error. If the port was in use, close the other fwsync window and start again.
 goto :end
 :missing
 echo.
