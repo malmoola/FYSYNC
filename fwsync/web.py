@@ -1,5 +1,6 @@
 """Local web UI (FastAPI, plain HTML/JS). Bound to 127.0.0.1 only. Load the backups, press Compare."""
 import json
+import signal
 import sys
 import threading
 import uuid
@@ -132,6 +133,12 @@ async def index():
     return PAGE
 
 
+def _break_to_interrupt(signum, frame):
+    """Windows Ctrl-Break / console close: uvicorn shuts down and then re-raises the signal; make that a
+    KeyboardInterrupt like Ctrl-C instead of the default handler killing the process"""
+    raise KeyboardInterrupt
+
+
 def serve(port=None, allow_push=False, browser=True):
     """127.0.0.1 only. port None: the first free port from 8765. Ctrl-C (Ctrl-Break on Windows) stops it cleanly;
     no fork, no POSIX-only signals, no reload workers."""
@@ -145,6 +152,8 @@ def serve(port=None, allow_push=False, browser=True):
     print('fwsync web UI: %s  (Ctrl-C to stop)' % url, flush=True)
     if browser:
         threading.Timer(1.0, webbrowser.open, (url,)).start()
+    if hasattr(signal, 'SIGBREAK'):
+        signal.signal(signal.SIGBREAK, _break_to_interrupt)
     try:
         uvicorn.run(app, host=WEB_HOST, port=port, log_level='warning', workers=1, reload=False)
     except KeyboardInterrupt:
