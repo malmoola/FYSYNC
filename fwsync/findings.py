@@ -394,6 +394,20 @@ def routing_findings(ctx):
         else:
             what = '%s routes %s (%s) out of %s, expected %s.' % (ctx.n['B'], p, name, r['b_route'], ifc)
             why = 'Traffic for %s may take the wrong path through %s.' % (name, ctx.n['B_short'])
+        hit = next((e for e in route_table(ctx.B) if IPSet.parse(p).issubset(e['set'])), None)
+        conn = ctx.B.interfaces.get(ifc)
+        on_ifc = bool(conn and conn.ip) and IPSet.parse(p).issubset(IPSet.net(conn.ip, conn.mask))
+        a_vlan = any(e['net'] == p and e['kind'] == 'connected' for e in route_table(ctx.A))
+        re_ip = a_vlan and conn is not None and bool(conn.ip) and not on_ifc
+        if hit is not None and hit['plen'] > 0:
+            what = '%s routes %s (%s) via %s (%s), not %s.' % (ctx.n['B'], p, name, hit['ifc'], hit['net'], ifc)
+            why = 'Traffic for %s follows that route, not the interface A uses.' % name
+        if re_ip:
+            what += ' %s on %s is %s, a different subnet.' % (ifc, ctx.n['B_short'], ipaddress.IPv4Interface(
+                '%s/%s' % (conn.ip, conn.mask)).network)
+            why += ' A static route is not the fix: decide whether this subnet moves to %s or each site keeps its own.' % ctx.n['B_short']
+        if ctx.B.dynamic_routing:
+            why += ' %s also runs %s, so the path may be learned.' % (ctx.n['B_short'], ', '.join(ctx.B.dynamic_routing))
         evid = []
         rest = IPSet.parse(p)
         for e in route_table(ctx.B):
@@ -412,8 +426,11 @@ def routing_findings(ctx):
         fmc = ['Devices > Device Management > %s > Routing > Static Route > Add Route: Interface %s, Available Network %s, '
                'Gateway %s, Metric 1.' % (ctx.n['B_short'], ifc, oname, nh)]
         cli = ['route %s %s %s %s 1' % (ifc, net.network_address, net.netmask, nh)]
+        if re_ip:
+            fmc = ['No route to add. Re-address %s on %s only if the subnet really moves there.' % (ifc, ctx.n['B_short'])]
+            cli, ob = ['! no route change: subnet design decision'], None
         verify = ['show route %s' % sample(IPSet.parse(p))]
-        out.append(_f(ctx, 'routing', _key('routing', p), [p], what, why, evid, fmc, cli, [ob], verify,
+        out.append(_f(ctx, 'routing', _key('routing', p), [p], what, why, evid, fmc, cli, [ob] if ob else [], verify,
                       {'status': r['status'], 'plain_status': plain(r['status'], ctx.n), 'fmc_group': 'Routing'}))
     return out
 
@@ -435,7 +452,10 @@ def pat_findings(ctx):
         s = IPSet.parse(p)
         name = ctx.label(p)
         key = _key('pat', p)
-        eff = natorder.effective(ctx.A, s, natorder.src_ifc(ctx.A, s), natorder.out_ifc(ctx.A, sorted(ctx.outs_a)))
+        a_src = natorder.src_ifc(ctx.A, s)
+        eff, _ = natorder.best_effective(ctx.A, s, a_src, sorted(ctx.outs_a))
+        b_in = ctx.prof.map_ifc(a_src) if a_src else ctx.b_in
+        b_in = b_in if b_in in ctx.B.interfaces else ctx.b_in
         hit = [(part, n) for part, n in eff if n is not None]
         dyn = [n for part, n in hit if natorder.shared(n)]
         cov = IPSet()
@@ -492,10 +512,10 @@ def pat_findings(ctx):
             cli_t = 'interface'
         fmc = ['Devices > NAT > %s > Add Rule: NAT Rule Manual, Type Dynamic, Insert In Category After Auto NAT; '
                'Interface Objects: Source %s, Destination %s; Translation: Original Source %s, %s.' % (
-                   ctx.natp, ctx.b_in, ctx.b_out, ', '.join(srcs), trans)]
-        cli = ['nat (%s,%s) after-auto source dynamic %s %s' % (ctx.b_in, ctx.b_out, x, cli_t) for x in srcs]
+                   ctx.natp, b_in, ctx.b_out, ', '.join(srcs), trans)]
+        cli = ['nat (%s,%s) after-auto source dynamic %s %s' % (b_in, ctx.b_out, x, cli_t) for x in srcs]
         h = sample(cov if hit and cov != s else s)
-        verify = ['packet-tracer input %s tcp %s 40000 8.8.8.8 443' % (ctx.b_in, h), 'show xlate local %s' % h]
+        verify = ['packet-tracer input %s tcp %s 40000 8.8.8.8 443' % (b_in, h), 'show xlate local %s' % h]
         out.append(_f(ctx, 'pat', key, [p], what, why, evid, fmc, cli, objects, verify,
                       {'status': b['status'], 'plain_status': 'no outbound PAT on %s' % ctx.n['B_short'], 'fmc_group': 'NAT',
                        'pat_sources': srcs, 'pat_mode': mode, 'pat_dedicated': dedicated,

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.2 – 2026-11-03
+
+Accuracy fixes from a real FTD pair.
+
+- Interface match: the same connected subnet now wins over name and role. A name match with different subnets and a
+  fallback match are flagged.
+- Roles: an interface with a private address and a default route elsewhere is no longer outside because of a public
+  NAT. `route ... tunneled` is no longer treated as a default route.
+- Routing findings name the route that actually matches. No static route is proposed for a subnet that is not on the
+  expected B interface.
+- PAT: every default-route exit is checked, `source dynamic any` on a real interface counts, and the fix uses the
+  subnet's own interface.
+- Reverse rule compare: a B rule with an identical mapped A permit is `also on A`, even if a narrow A deny sits above it.
+- New whole-firewall checks: A blocks missing on B, published A addresses with no B NAT, B rules whose source is not
+  behind their source interface.
+
 ## 0.5.1 – 2026-11-03
 
 Windows support. Native Windows with a bundled Python is the main path; WSL is the fallback. No .exe, no code signing.

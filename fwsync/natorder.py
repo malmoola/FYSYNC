@@ -33,8 +33,10 @@ def _ifc_ok(rule_ifc, ifc):
 
 
 def general(n):
-    """translates any-destination traffic: active, no destination part, real not 'any'"""
-    return not n.inactive and n.dst_real is None and n.real is not None and not n.real.is_any()
+    """translates any-destination traffic: active, no destination part; real 'any' only when tied to a real interface"""
+    if n.inactive or n.dst_real is not None or n.real is None:
+        return False
+    return not n.real.is_any() or n.real_ifc not in (None, '', 'any')
 
 
 def shared(n):
@@ -98,6 +100,18 @@ def out_ifc(cfg, outs):
         if r['plen'] == 0 and r['ifc'] in outs:
             return r['ifc']
     return outs[0] if outs else None
+
+
+def best_effective(cfg, s, src, outs):
+    """(first-match partition, outside interface) for the default-route exit that translates the most of s: with two
+    ISPs a subnet may have PAT on only one of them, and that is still outbound PAT"""
+    from .detect import route_table
+    exits = [r['ifc'] for r in route_table(cfg) if r['plen'] == 0 and r['ifc'] in outs]
+    exits = list(dict.fromkeys(exits)) or [out_ifc(cfg, outs)]
+
+    def done(eff):
+        return sum(p.size() for p, r in eff if r is not None and shared(r))
+    return max(((effective(cfg, s, src, o), o) for o in exits), key=lambda x: done(x[0]))
 
 
 def src_ifc(cfg, s):

@@ -245,6 +245,7 @@ class LinaAdapter(Adapter):
         r.text = head.rstrip()
         if len(t) > 5 and t[5].isdigit():
             r.distance = int(t[5])
+        r.tunneled = 'tunneled' in t
         if 'track' in t:
             r.track = int(t[t.index('track') + 1])
         self.cfg.routes.append(r)
