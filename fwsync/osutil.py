@@ -80,6 +80,8 @@ def protect(path, run=subprocess.run):
         try:
             r = run(cmd, capture_output=True, text=True)
             ok, why = r.returncode == 0, (r.stderr or r.stdout or '').strip()
+            if ok and run is subprocess.run and sid.startswith('S-1-'):
+                ok, why = _strip_other_entries(p, sid)
         except OSError as e:
             ok, why = False, str(e)
         if not ok:
@@ -119,16 +121,63 @@ def _sddl_dacl(path):
         k32.LocalFree(sd)
 
 
-def owner_only_dacl(sddl, sid):
-    """SDDL 'D:P(A;;FA;;;S-1-5-...)': protected (no inherited entries), one allow entry, full control, this SID"""
+def _full_sid(text):
+    """SDDL SID or alias (LA, SY, BA, OW ...) -> 'S-1-...' (Win32 ConvertStringSidToSid / ConvertSidToStringSid)"""
+    if text.upper().startswith('S-1-'):
+        return text.upper()
+    import ctypes
+    from ctypes import wintypes
+    adv = ctypes.WinDLL('advapi32', use_last_error=True)
+    k32 = ctypes.WinDLL('kernel32')
+    adv.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    psid, out = ctypes.c_void_p(), wintypes.LPWSTR()
+    if not adv.ConvertStringSidToSidW(text, ctypes.byref(psid)):
+        return text.upper()
+    try:
+        if not adv.ConvertSidToStringSidW(psid, ctypes.byref(out)):
+            return text.upper()
+        v = out.value.upper()
+        k32.LocalFree(ctypes.cast(out, ctypes.c_void_p))
+        return v
+    finally:
+        k32.LocalFree(psid)
+
+
+def dacl_entries(sddl, resolve=_full_sid):
+    """'D:PAI(A;;FA;;;LA)(A;;FA;;;SY)' -> (protected, [(type, rights, 'S-1-...'), ...])"""
     m = re.match(r'^D:([A-Z]*)((?:\([^)]*\))*)$', sddl or '')
-    if not m or 'P' not in m.group(1):
-        return False
-    aces = re.findall(r'\(([^)]*)\)', m.group(2))
-    if len(aces) != 1:
-        return False
-    f = aces[0].split(';')
-    return len(f) >= 6 and f[0] == 'A' and f[2] in ('FA', '0x1f01ff') and f[5].upper() == sid.upper()
+    if not m:
+        return False, None
+    aces = []
+    for ace in re.findall(r'\(([^)]*)\)', m.group(2)):
+        f = ace.split(';')
+        if len(f) >= 6:
+            aces.append((f[0], f[2], resolve(f[5])))
+    return 'P' in m.group(1), aces
+
+
+def owner_only_dacl(sddl, sid, resolve=_full_sid):
+    """protected DACL (no inherited entries) with one allow entry: full control for this SID"""
+    protected, aces = dacl_entries(sddl, resolve)
+    return bool(protected and aces and len(aces) == 1 and aces[0][0] == 'A' and aces[0][1] in ('FA', '0x1f01ff')
+                and aces[0][2] == sid.upper())
+
+
+def _strip_other_entries(path, sid):
+    """icacls /grant:r keeps explicit entries of other accounts (for example SYSTEM / Administrators / OWNER RIGHTS
+    copied from a folder created with mode 0o700): remove them with icacls /remove:g, then check again"""
+    protected, aces = dacl_entries(_sddl_dacl(path))
+    others = sorted({a[2] for a in aces or [] if a[2] != sid.upper()})
+    if others:
+        r = subprocess.run(['icacls', str(path), '/remove:g'] + ['*' + o for o in others], capture_output=True,
+                           text=True)
+        if r.returncode:
+            return False, (r.stderr or r.stdout).strip()
+    if owner_only_dacl(_sddl_dacl(path), sid):
+        return True, ''
+    return False, 'other accounts still have access: %s' % _sddl_dacl(path)
 
 
 def is_protected(path):

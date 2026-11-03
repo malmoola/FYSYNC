@@ -118,14 +118,16 @@ def test_protect_missing_icacls_warns(as_windows, tmp_path):
 
 
 def test_owner_only_dacl():
-    me = 'S-1-5-21-1-2-3-1001'
-    assert osutil.owner_only_dacl('D:PAI(A;;FA;;;%s)' % me, me)
-    assert osutil.owner_only_dacl('D:P(A;;0x1f01ff;;;%s)' % me.lower(), me)
-    assert not osutil.owner_only_dacl('D:AI(A;;FA;;;%s)' % me, me)
-    assert not osutil.owner_only_dacl('D:PAI(A;;FA;;;%s)(A;;0x1200a9;;;BU)' % me, me)
-    assert not osutil.owner_only_dacl('D:PAI(A;;FR;;;%s)' % me, me)
-    assert not osutil.owner_only_dacl('D:PAI(A;;FA;;;S-1-5-21-9)', me)
-    assert not osutil.owner_only_dacl('', me)
+    me = 'S-1-5-21-1-2-3-500'
+    alias = {'LA': me, 'SY': 'S-1-5-18', 'BA': 'S-1-5-32-544', 'OW': 'S-1-3-4', 'BU': 'S-1-5-32-545'}
+    res = lambda x: alias.get(x, x.upper())
+    ok = lambda sddl: osutil.owner_only_dacl(sddl, me, resolve=res)
+    assert ok('D:PAI(A;;FA;;;%s)' % me) and ok('D:P(A;;0x1f01ff;;;%s)' % me.lower()) and ok('D:PAI(A;;FA;;;LA)')
+    assert not ok('D:AI(A;;FA;;;%s)' % me)
+    assert not ok('D:PAI(A;;FA;;;LA)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)')
+    assert not ok('D:PAI(A;;FA;;;%s)(A;;0x1200a9;;;BU)' % me)
+    assert not ok('D:PAI(A;;FR;;;%s)' % me) and not ok('D:PAI(A;;FA;;;S-1-5-21-9)') and not ok('')
+    assert osutil.dacl_entries('D:PAI(A;;FA;;;LA)(A;;FA;;;SY)', res) == (True, [('A', 'FA', me), ('A', 'FA', 'S-1-5-18')])
 
 
 @pytest.mark.skipif(WIN, reason='POSIX mode bits')
