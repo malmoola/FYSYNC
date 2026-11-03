@@ -2,6 +2,7 @@
 file protection (chmod 600 on macOS/Linux, icacls on Windows) and local port selection."""
 import getpass
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -93,29 +94,49 @@ def protect(path, run=subprocess.run):
         return False
 
 
-def acl_entries(icacls_out, path):
-    """icacls output -> ['DOMAIN\\user:(F)', ...]"""
-    lines = [l for l in icacls_out.splitlines() if l.strip()]
-    lines = [l for l in lines if not l.lower().startswith(('successfully processed', 'failed processing'))]
-    out = []
-    for i, l in enumerate(lines):
-        if i == 0 and l.startswith(str(path)):
-            l = l[len(str(path)):]
-        if l.strip():
-            out.append(l.strip())
-    return out
+def _sddl_dacl(path):
+    """the file's DACL as SDDL (Win32 API through ctypes: no shell-out, no localized tool output)"""
+    import ctypes
+    from ctypes import wintypes
+    adv = ctypes.WinDLL('advapi32', use_last_error=True)
+    k32 = ctypes.WinDLL('kernel32')
+    adv.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p,
+                                          ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                          ctypes.POINTER(ctypes.c_void_p)]
+    adv.ConvertSecurityDescriptorToStringSecurityDescriptorW.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(wintypes.LPWSTR), ctypes.c_void_p]
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    sd, text = ctypes.c_void_p(), wintypes.LPWSTR()
+    rc = adv.GetNamedSecurityInfoW(str(path), 1, 4, None, None, None, None, ctypes.byref(sd))
+    if rc:
+        raise OSError(rc, 'GetNamedSecurityInfoW failed', str(path))
+    try:
+        if not adv.ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, 1, 4, ctypes.byref(text), None):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return text.value
+    finally:
+        k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+        k32.LocalFree(sd)
 
 
-def is_protected(path, run=subprocess.run):
-    """True if only the current user has access (mode 600, or on Windows one full-control entry for this user)"""
+def owner_only_dacl(sddl, sid):
+    """SDDL 'D:P(A;;FA;;;S-1-5-...)': protected (no inherited entries), one allow entry, full control, this SID"""
+    m = re.match(r'^D:([A-Z]*)((?:\([^)]*\))*)$', sddl or '')
+    if not m or 'P' not in m.group(1):
+        return False
+    aces = re.findall(r'\(([^)]*)\)', m.group(2))
+    if len(aces) != 1:
+        return False
+    f = aces[0].split(';')
+    return len(f) >= 6 and f[0] == 'A' and f[2] in ('FA', '0x1f01ff') and f[5].upper() == sid.upper()
+
+
+def is_protected(path):
+    """True if only the current user has access (mode 600, or on Windows a protected DACL with one full-control entry
+    for the current user's SID)"""
     if not is_windows():
         return (os.stat(path).st_mode & 0o777) == 0o600
-    ent = acl_entries(run(['icacls', str(path)], capture_output=True, text=True).stdout, path)
-    user = _windows_user().lower()
-    if len(ent) != 1 or '(F)' not in ent[0]:
-        return False
-    name = ent[0].rsplit(':', 1)[0].lower()
-    return name == user or name.endswith('\\' + user) or name.startswith('*s-1-')
+    return owner_only_dacl(_sddl_dacl(path), _windows_sid())
 
 
 def port_free(port, host=WEB_HOST):

@@ -117,12 +117,15 @@ def test_protect_missing_icacls_warns(as_windows, tmp_path):
         assert osutil.protect(tmp_path / 'x', run=boom) is False
 
 
-def test_is_protected_parses_icacls(as_windows):
-    p = r'C:\Users\me\fwsync-reports\r (1).html'
-    one = '%s HOST\\me:(F)\n\nSuccessfully processed 1 files; Failed processing 0 files\n' % p
-    two = '%s HOST\\me:(F)\n    BUILTIN\\Users:(RX)\n\nSuccessfully processed 1 files; Failed processing 0 files\n' % p
-    assert osutil.is_protected(p, run=lambda c, **k: subprocess.CompletedProcess(c, 0, one, ''))
-    assert not osutil.is_protected(p, run=lambda c, **k: subprocess.CompletedProcess(c, 0, two, ''))
+def test_owner_only_dacl():
+    me = 'S-1-5-21-1-2-3-1001'
+    assert osutil.owner_only_dacl('D:PAI(A;;FA;;;%s)' % me, me)
+    assert osutil.owner_only_dacl('D:P(A;;0x1f01ff;;;%s)' % me.lower(), me)
+    assert not osutil.owner_only_dacl('D:AI(A;;FA;;;%s)' % me, me)
+    assert not osutil.owner_only_dacl('D:PAI(A;;FA;;;%s)(A;;0x1200a9;;;BU)' % me, me)
+    assert not osutil.owner_only_dacl('D:PAI(A;;FR;;;%s)' % me, me)
+    assert not osutil.owner_only_dacl('D:PAI(A;;FA;;;S-1-5-21-9)', me)
+    assert not osutil.owner_only_dacl('', me)
 
 
 @pytest.mark.skipif(WIN, reason='POSIX mode bits')

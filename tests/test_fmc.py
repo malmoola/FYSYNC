@@ -1,12 +1,12 @@
 """FMC reader / renderer / staged copy. Synthetic snapshot (documentation and private addresses only) and a fake
 FMC session: no network, no production data."""
 import json
-import os
 
 import pytest
 
 from fwsync import fmc, gaps
 from fwsync.adapters import load
+from fwsync.osutil import is_protected
 from fwsync.pipeline import run
 
 
@@ -189,7 +189,7 @@ def test_apply_writes_undo_and_undo_deletes_in_reverse(tmp_path):
     up = tmp_path / 'undo.json'
     res, undo = fmc.apply_copy(w, plan, b, str(up), dry_run=False, allow_push=True, allowlist=str(al))
     doc = json.loads(up.read_text())
-    assert oct(os.stat(up).st_mode)[-3:] == '600'
+    assert is_protected(up)
     assert [o['step'] for o in doc['ops']] == ['object', 'category', 'rule']
     posted = [c for c in w.s.calls if c[0] == 'POST']
     rule = posted[-1][2]

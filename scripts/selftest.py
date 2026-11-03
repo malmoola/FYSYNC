@@ -129,11 +129,10 @@ def check_web(py, seconds=10):
 
 
 def check_protect(py, report):
-    code = ('import sys; from fwsync.osutil import is_protected, is_windows; import subprocess, os;'
+    code = ('import sys, os; from fwsync.osutil import is_protected, is_windows;'
             'p = sys.argv[1]; ok = is_protected(p);'
-            'ev = subprocess.run(["icacls", p], capture_output=True, text=True).stdout.strip() if is_windows() '
-            'else oct(os.stat(p).st_mode & 0o777);'
-            'print(ev.replace(chr(10), " | ")); sys.exit(0 if ok else 1)')
+            'print(("DACL protected, one full-control entry for the current user" if ok else "other users have access")'
+            ' if is_windows() else oct(os.stat(p).st_mode & 0o777)); sys.exit(0 if ok else 1)')
     rc, out = run([py, '-c', code, report])
     return rc == 0, out.strip()
 
