@@ -14,8 +14,10 @@ Windows support. Native Windows with a bundled Python is the main path; WSL is t
 - Config input: utf-8, utf-8 with BOM, then cp1252; CRLF, LF and CR line endings (files, web uploads, profiles,
   allowlist, credential files). Reports and other output written as UTF-8.
 - Owner-only files (`fwsync/osutil.py`): chmod 600 on macOS/Linux; on Windows `icacls /inheritance:r /grant:r` for the
-  current user's SID (falls back to `%USERNAME%`). Reports, profiles, snapshots, copy plans, undo files. A failure is
-  a warning naming the file, never silent.
+  current user's SID (falls back to `%USERNAME%`), then the DACL is read back (Win32 API, locale independent) and
+  explicit entries of other accounts (e.g. SYSTEM / Administrators copied from a 0o700 folder) are removed with
+  `icacls /remove:g`. Reports, profiles, snapshots, copy plans, undo files. A failure is a warning naming the file,
+  never silent.
 - Web UI: 127.0.0.1 only, first free port from 8765 (`--port N` fails with a clear message when taken), opens the
   default browser (`--no-browser`), clean Ctrl-C / Ctrl-Break stop on Windows (no fork, no POSIX-only signals, one
   worker, no reload); `__main__` spawn guard.

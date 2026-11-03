@@ -61,8 +61,9 @@ python\python.exe -m fwsync fmc-read --fmc https://fmc.example --cred %USERPROFI
 - Settings: `%USERPROFILE%\.fwsync\` (for example `fmc_allowlist.txt` for the FMC copy commands, credential files).
 - Config backups may be UTF-8 (with or without BOM) or Windows-1252, with CRLF or LF line endings.
 - Reports, profiles, snapshots and undo files are UTF-8. Each one is restricted to your user with
-  `icacls <file> /inheritance:r /grant:r <you>:F` (your SID, so domain and Entra ID accounts work). If that fails,
-  fwsync prints a warning naming the file; protect it by hand. Write reports to a folder only you use, not a share.
+  `icacls <file> /inheritance:r /grant:r <you>:F` (your SID, so domain and Entra ID accounts work); fwsync then reads
+  the ACL back and removes any other account still listed (`icacls /remove:g`). If that fails, fwsync prints a
+  warning naming the file; protect it by hand. Write reports to a folder only you use, not a share.
 - TLS: FMC certificates are verified. If your FMC uses an internal or corporate CA, export that CA as PEM and pass
   `--ca-bundle corp-ca.pem` (or set `fmc.ca_bundle` in a profile, or `FWSYNC_CA_BUNDLE`). A proxy from `HTTPS_PROXY`
   is used unless the FMC is in `NO_PROXY`.
