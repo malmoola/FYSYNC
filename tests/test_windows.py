@@ -140,7 +140,9 @@ def test_protect_posix_mode_600(tmp_path):
 def test_protect_real_icacls(tmp_path):
     p = tmp_path / 'r.json'
     p.write_text('{}')
-    assert osutil.protect(p) and osutil.is_protected(p)
+    assert osutil.protect(p)
+    assert osutil.is_protected(p), (osutil._sddl_dacl(p), osutil._windows_sid(),
+                                    subprocess.run(['icacls', str(p)], capture_output=True, text=True).stdout)
 
 
 def test_reports_are_protected(tmp_path):
