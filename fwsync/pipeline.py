@@ -142,8 +142,11 @@ def run(a_list, b, prof=None, parts=None):
     from . import gapcheck, runbook
     gapcheck.build(res, prof, A, B, info)
     runbook.build(res)
+    if len(a_list) == 1:
+        from . import gaplist
+        gaplist.build(res, prof, A, B, info, a_list[0][0], b[0])
     from . import safety
-    safety.enforce(res, ('takeover', 'runbook', 'failback', 'plan'))
+    safety.enforce(res, ('takeover', 'runbook', 'failback', 'plan', 'gaplist'), B=B)
     if res['safety']['stripped']:
         res['warnings'][0].append('safety: %d any-to-any permit line(s) stripped from the output' % res['safety']['stripped'])
     res['gaps_area'] = 'fmc' if 'fmc' in (A.vendor, B.vendor) or any(a.vendor == 'fmc' for a in As) else 'lina'

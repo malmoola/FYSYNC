@@ -1074,15 +1074,20 @@ def compare_routing(A, B, prof):
         a_ifc = max(a_parts, key=lambda x: x[1].size())[0] if a_parts else ''
         want_role = ra.get(a_ifc, ('inside',))[0]
         want = prof.map_ifc(a_ifc) if a_ifc else ''
-        parts = route_split(B, s)
+        ign = set(A.ignored or ()) | {prof.interface_map.get(x) for x in (A.ignored or ()) if prof.interface_map.get(x)}
+        parts = [(ifc, sub) for ifc, sub in route_split(B, s) if ifc not in ign]     # left out on A as well
         desc, worst = [], 'ok'
         for ifc, sub in parts:
             role = rb.get(ifc, ('',))[0]
+            # each part is judged against A's route for that same part (a subnet A splits over two interfaces)
+            same = [(ai, x) for ai, x in a_parts if ai and x.overlaps(sub)]
+            w_role, w_ifc = (ra.get(same[0][0], ('inside',))[0], prof.map_ifc(same[0][0])) if len(same) == 1 else \
+                (want_role, want)
             if not ifc:
                 st = 'no route on B'
-            elif role != want_role:
+            elif role != w_role:
                 st = 'wrong way'
-            elif ifc != want:
+            elif ifc != w_ifc:
                 st = 'other %s interface' % role
             else:
                 st = 'ok'

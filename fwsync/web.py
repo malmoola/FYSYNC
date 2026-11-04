@@ -178,7 +178,7 @@ th{background:var(--head);position:sticky;top:0}.tabs button{background:var(--he
 pre{white-space:pre-wrap;border:1px solid var(--line);padding:8px;max-height:420px;overflow:auto}.mut{color:var(--mut)}.flag{color:var(--bad)}
 .wrap{overflow-x:auto}.box{max-height:300px;overflow:auto;border:1px solid var(--line)}.hide{display:none}tr.st td{opacity:.55}
 .warn{color:var(--warn)}.kids{background:var(--head)}
-.verdict{font-size:15px;font-weight:600;margin:6px 0}.verdict.ok{color:var(--ok)}.verdict.no{color:var(--bad)}
+fieldset{min-width:0;max-width:100%;box-sizing:border-box}input,select{max-width:100%;box-sizing:border-box}.gaps td pre{margin:0;font-size:12px;max-width:520px;white-space:pre-wrap}.verdict{font-size:15px;font-weight:600;margin:6px 0}.verdict.ok{color:var(--ok)}.verdict.no{color:var(--bad)}
 .cards{display:flex;flex-wrap:wrap;gap:12px}.card{border:1px solid var(--line);border-radius:6px;padding:8px 12px;min-width:320px}
 .card h3{margin:2px 0 6px}.card td{border:none;padding:3px 8px 3px 0}.card tr.link{cursor:pointer}.card tr.link:hover td{text-decoration:underline}
 .st-ok{color:var(--ok)}.st-act{color:var(--warn);font-weight:600}.st-dec{color:var(--bad);font-weight:600}
@@ -208,10 +208,11 @@ A1 <input type=text name=a1_path size=34> A2 <input type=text name=a2_path size=
 Profile path (JSON or YAML) <input type=text name=profile_path size=50></details>
 </fieldset><button type=submit>Compare</button> <span id=busy class=mut></span></form>
 
-<nav id=nav class="tabs hide"><button data-v=takeover class=on>Takeover</button><button data-v=readiness>Readiness</button><button data-v=findings>Findings</button>
+<nav id=nav class="tabs hide"><button data-v=gaps class=on>Gaps</button><button data-v=takeover>Takeover</button><button data-v=readiness>Readiness</button><button data-v=findings>Findings</button>
 <button data-v=decisions>Your choices</button><button data-v=plan>Remediation plan</button><button data-v=setup>Setup</button>
 <button data-v=details>Details (advanced)</button></nav>
-<section id=v-takeover class=view></section>
+<section id=v-gaps class=view></section>
+<section id=v-takeover class="view hide"></section>
 <section id=v-readiness class="view hide"></section>
 <section id=v-findings class="view hide"><p><select id=fcat><option value="">all categories</option><option>routing</option><option>pat</option>
 <option>inbound</option><option>rules</option><option>objects</option></select> <select id=fscope><option value="">all subnets</option></select>
@@ -278,7 +279,7 @@ fd.append('overrides',JSON.stringify(withEdits?edits():(LOADED||{})));
 $('busy').textContent='comparing...';const r=await fetch('/api/compare',{method:'POST',body:fd});$('busy').textContent='';
 if(!r.ok){alert(await r.text());return}R=await r.json();R.planned=R.planned||[];P=JSON.parse(JSON.stringify(R.profile_used));sel.clear();showDet();showSum();tabs();draw();renderAll()}
 $('f').onsubmit=e=>{e.preventDefault();go(false)};$('rerun').onclick=()=>go(true);
-let VIEW='takeover';
+let VIEW='gaps';
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>show(b.dataset.v));
 function show(v){VIEW=v;document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x.dataset.v==v));
 document.querySelectorAll('.view').forEach(s=>s.classList.toggle('hide',s.id!='v-'+v))}
@@ -296,7 +297,17 @@ h+='<details><summary>Details: open items per area, whole-firewall checks, cover
 h+=`<h3>Whole-firewall checks (${(R.firewide||[]).length})</h3>`+tbl(['check','item','detail'],(R.firewide||[]).map(r=>Object.assign({},r,{check:L(r.check)})));
 h+='<h3>Coverage: where every config line was compared</h3>'+tbl(['category','a_lines','b_lines','how','differences','impact','why'],R.coverage||[])+'</details>';
 $('v-takeover').innerHTML=h}
-function renderAll(){$('nav').classList.remove('hide');takeoverView();readinessView();fillScopes();findingsView();decisionsView();planView();show(VIEW)}
+function gapsView(){const g=R.gaplist,n=R.names;if(!g){$('v-gaps').innerHTML='<p class=mut>The gap list needs one A config and LINA (show running-config) on both sides. See the Takeover tab.</p>';return}
+let h=`<p class=map>A = <b>${esc(n.A)}</b> (the site that fails), B = <b>${esc(n.B)}</b> (the site that takes over).</p><h2>What ${esc(n.B_short||n.B)} is missing compared to ${esc(n.A_short||n.A)}</h2><p class="verdict ${g.verdict.ready?'ok':'no'}">${esc(g.verdict.text)}</p>`;
+h+='<div class=wrap><table class=gaps><tr>'+g.cols.map(c=>`<th>${esc(c[1])}</th>`).join('')+'</tr>'+g.rows.map(r=>'<tr>'+g.cols.map(c=>Array.isArray(r[c[0]])?`<td><pre>${esc(r[c[0]].join('\n'))}</pre></td>`:`<td>${esc(r[c[0]])}</td>`).join('')+'</tr>').join('')+'</table></div>';
+if(!g.rows.length)h+='<p class=mut>No gaps.</p>';
+h+='<h3>At outage</h3>'+(g.outage||[]).map(c=>`<p><b>${esc(c.case)}</b></p><ol>${c.steps.map(x=>`<li>${esc(x)}</li>`).join('')}</ol>`).join('');
+h+=`<h3>Review: ${esc(n.B_short||n.B)} allows more than ${esc(n.A_short||n.A)} (${g.review.length})</h3><p class=mut>Not a gap. Review it with the rule owner.</p>`+(g.review.length?tbl(['rule','line','src','dst','service'],g.review):'');
+h+=`<details><summary>Every A NAT line (${g.nat_ref.length})</summary>`+tbl(['line','text','kind','result','b_match'],g.nat_ref)+'</details>';
+h+=`<details><summary>Every A rule (${g.rule_ref.length})</summary>`+tbl(['rule','lines','action','result','b_match'],g.rule_ref)+'</details>';
+h+=`<details><summary>Missing objects (${g.objects.length})</summary>`+tbl(['name','type','value','status','used_by'],g.objects)+'</details>';
+$('v-gaps').innerHTML=h}
+function renderAll(){$('nav').classList.remove('hide');gapsView();takeoverView();readinessView();fillScopes();findingsView();decisionsView();planView();show(VIEW)}
 const STC={'Ready':'st-ok','Action needed':'st-act','Decision needed':'st-dec','Check first':'st-chk','During failover':'st-chk'};
 const CATS={'Routing':['routing'],'Outbound internet (PAT)':['pat'],'Published servers (inbound)':['inbound'],'Access rules':['rules','objects'],'DNS changes':['inbound'],'Public IPs':[]};
 function readinessView(){const n=R.names;let h=`<h2>Readiness per network</h2><p class=mut>${esc(n.A)} &rarr; ${esc(n.B)}</p>`+R.readiness.map(c=>`<p class="verdict ${c.ready?'ok':'no'}">${esc(c.verdict)}</p><p class=reason>${esc(c.reason||'')}</p>`).join('');

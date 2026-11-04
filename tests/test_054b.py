@@ -226,34 +226,39 @@ IDENT = 'nat (dci,outside) source static SITE-NETS SITE-NETS'
 BACK = re.compile(r'^nat \(dci,outside\) 1 source static SITE-NETS SITE-NETS$')
 
 
+def back(res):
+    return [x for x in res['takeover'] if x['id'].startswith('T-NATBACK-') and 'SITE-NETS' in x['subject']]
+
+
 def site(b=SITE_B, **prof):
     return run([(SITE_A, 'fw-alpha.txt')], (b, 'fw-bravo.txt'), prof or None)[0]
 
 
 def test_4a_backhaul_identity_nat_is_a_during_failover_edit_to_after_auto():
     res = site()
-    t = [x for x in res['takeover'] if IDENT in ' '.join(x['cli'])]
+    t = back(res)
     assert len(t) == 1, [x['title'] for x in res['takeover']]
     t = t[0]
     assert t['group'] == 'during'
-    assert 'nat (apps,outside) after-auto source static SITE-NETS SITE-NETS' in t['cli']
+    assert 'nat (apps,outside) after-auto source static SITE-NETS SITE-NETS' in ' '.join(t['fmc'])
+    assert not [c for c in t['cli'] if c.startswith(('no nat', 'nat '))]      # 0.5.4b item 13: edit, never remove
     assert 'After Auto NAT' in ' '.join(t['fmc'])
     assert "doesn't match" not in t['detail'] and 'does not match' not in t['detail']
-    assert t['undo'] and [c for c in t['undo']['cli'] if BACK.match(c)]
+    assert t['undo'] and [c for c in t['undo']['fmc'] if BACK.match(c.split('The rule then reads: ')[-1])]
 
 
 def test_4b_never_says_it_does_not_match_today_when_routed_another_way():
     b = SITE_B.replace('route dci 192.0.2.0 255.255.255.0 203.0.113.66 1',
                        'route outside 192.0.2.0 255.255.255.0 203.0.113.3 1')
     res = site(b)
-    t = [x for x in res['takeover'] if IDENT in ' '.join(x['cli'])]
+    t = back(res)
     assert t and all(x['group'] == 'during' for x in t)
     assert not [x for x in res['takeover'] if 'does not match this traffic today' in x['detail']]
 
 
 def test_4c_override_notes_name_every_published_server_below():
     res = site()
-    t = [x for x in res['takeover'] if IDENT in ' '.join(x['cli'])][0]
+    t = back(res)[0]
     assert 'SRV-APP' in t['detail'] and 'auto NAT' in t['detail']
     assert 'SRV-DB' in t['detail'] and 'manual NAT' in t['detail']
 
@@ -483,10 +488,11 @@ def test_e2e_l7_url_exceptions_rule_gives_no_cli():
 
 def test_e2e_two_sites_backhaul_identity_one_during_fix_one_failback_and_overrides():
     res = site()
-    during = [i for i in items(res) if i['group'] == 'during' and IDENT in ' '.join(i['cli'])]
+    during = [i for i in items(res) if i['group'] == 'during' and i['ref'].startswith('T-NATBACK-')]
     assert len(during) == 1
     back = [i for i in res['failback'] if i['ref'] == during[0]['ref'] + '-back']
-    assert len(back) == 1 and [c for c in back[0]['cli'] if BACK.match(c)]
+    assert len(back) == 1 and [c for c in back[0]['fmc'] if BACK.match(c.split('The rule then reads: ')[-1])]
+    assert not [c for c in during[0]['cli'] + back[0]['cli'] if c.startswith('no nat')]
     assert 'SRV-APP' in during[0]['what'] and 'SRV-DB' in during[0]['what']
     assert not [c for c in all_cli(res) if ANY_ANY.search(c)]
 

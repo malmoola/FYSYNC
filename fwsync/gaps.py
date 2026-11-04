@@ -46,8 +46,10 @@ GAPS = [
      'Check the hit counts (show access-list, show nat detail) of a "Fix before failover" NAT or route on B before '
      'making it.'),
     (14, 'all', 'FQDN objects are matched by name or FQDN and port',
-     'Their addresses are not resolved. An A FQDN allow is reported only when an A block below it would take its '
-     'traffic and B has no rule naming the same FQDN.', 'Resolve critical FQDN objects by hand.'),
+     'Their addresses are not resolved. An A FQDN allow is reported when B has no rule naming the same FQDN and B\'s '
+     'first rule for that traffic is a block (also an L7 block held by its name, and the default action), or when an '
+     'A block below it would take its traffic. A B allow with any on the FQDN side counts as allowing it.',
+     'Resolve critical FQDN objects by hand.'),
     (15, 'lina', 'Site translation pairs private subnets only',
      'A site-specific subnet is paired only when both sides are private and the same size; other twins are compared '
      'as they are.', 'Set the interface map, or compare the twin servers by hand.'),
@@ -61,6 +63,19 @@ GAPS = [
     (18, 'lina', 'VPN pools are paired by order',
      "A's ip local pool maps to B's pool in the order they are defined (or to B's only pool).",
      'With several pools on each side, check that each new rule names the right B pool.'),
+    (19, 'lina', 'The NAT walk places a subnet by B\'s routes',
+     'Where an A subnet lives on B comes from B\'s connected interfaces (also shut ones), then B\'s static routes, then '
+     'the interface map, then inside. A NAT limited to a service matches only the same service; a destination rule '
+     'matches only when the A destination is inside it. Learned routes are not seen.',
+     'Check the reference view "Every A NAT line" for a subnet placed on the wrong interface.'),
+    (20, 'lina', 'A public block "routed to A\'s ISP" is A\'s outside subnet',
+     'A B NAT whose public address is in A\'s outside subnet (and not in B\'s) depends on A\'s ISP routing that block to '
+     'B at outage. Other public blocks routed to A by the ISP are not visible in a config.',
+     'Confirm every public block with the ISP; packet-tracer cannot prove it.'),
+    (21, 'lina', 'Rule and NAT gaps follow the LINA view of an FTD',
+     'A Block* rule that shows permit is taken as an L7 block, an L7 rule with any (or a /8 or wider) on a side is '
+     '"Compare in FMC", and other L7 rules are copied in FMC with their conditions.',
+     'Compare the L7 rules in FMC, or use an FMC snapshot.'),
 ]
 
 

@@ -1644,7 +1644,7 @@ def build(res, prof, A, B, info):
     fs = routing_findings(ctx) + pat_findings(ctx) + inbound_findings(ctx) + rule_findings(ctx) + object_findings(ctx)
     finalize(ctx, fs)
     from . import safety
-    res['safety'] = safety.enforce({'findings': fs})
+    res['safety'] = safety.enforce({'findings': fs}, B=B)
     for f in fs:
         keep = []
         for o in f['fix']['objects']:

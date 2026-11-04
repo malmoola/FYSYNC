@@ -92,6 +92,51 @@ Corrections from real configs (regressions the first 0.5.4 tests missed):
 - A rule walk that splits into too many address parts stops splitting (no more than 64), and skips rules that miss
   all of what is left with one check.
 
+Gap list (the default view):
+
+- The report and the web UI open on one table of what B is missing compared to A, and nothing else: Gap, When,
+  Address, Object, A (line), B today (line), Required on B, Config. When is Now, Now disabled, At outage, Decision,
+  Confirm use, If route needed, Compare in FMC or Only if allow-listed. Rows sort by When, then Gap, and the verdict
+  counts are the rows. The runbook, findings and plan stay below as the older view. CSV: `*_gaplist.csv`.
+- NAT is a first-match walk, not a name or set match. Every active A NAT line is placed where its real subnet lives on
+  B (connected interfaces, also shut ones, then static routes, then the interface map, then inside) and walked through
+  B's NAT in real order: manual before auto, auto static first then longest prefix, manual after auto, with real and
+  mapped interfaces (also any) and destination-limited rules. Each line is OK same IP (also A's IP through B's dynamic
+  PAT), OK B public IP (never a gap), OK site device, Wrong source interface, Missing PAT, Missing static NAT, Missing
+  VPN NAT, Missing internal NAT, Missing NAT exemption, Change at outage or Hairpin PAT.
+- A catch-all PAT covers only the traffic that enters its interface. A NAT exemption is checked per CIDR and is a gap
+  only where B would translate that traffic; a destination-limited identity NAT on B covers it. NAT with destination
+  translation is real translation, never "no NAT".
+- A second walk with the proposed fixes applied reports the exemptions a fix makes necessary ("needed because of the
+  fix").
+- Change at outage: a B rule that is right today because the subnet's own interface is shut and the traffic arrives
+  through another one, and an identity NAT above B's static NATs, are steps at outage with their failback, not gaps
+  to fix now.
+- A static NAT with no inbound rule on A, whose traffic B's PAT (or a proposed PAT) translates, is "Only if
+  allow-listed".
+- NAT fixes: a rule on the wrong interface is edited, never added twice; a new PAT uses the address B's sibling
+  subnets use; a new static NAT reuses A's public IP when B already has NATs in that block (added disabled, enabled at
+  outage), and is otherwise a Decision with no placeholder object; a NAT that could answer ARP or change traffic today
+  is added disabled; a hairpin PAT is "Confirm use". A PAT inside a wider proposed PAT is not proposed again.
+- Rules, one result per A rule name: an L7 rule whose LINA line is broad is "Compare in FMC"; another L7 rule is
+  copied in FMC with its conditions and no LINA line; a Block* rule that shows permit is an L7 block, never covered,
+  shadowed or an allow, and is a Missing block placed below B's rules for the allows above it on A. Missing L4 blocks
+  have their objects and position. Addresses on B's rule but not on the zone where they live are "Wrong zone": add
+  the zone to the existing rule. Site twin rules match.
+- FQDN: an A FQDN allow is a gap when B has no rule naming that FQDN and B's first rule for the traffic is a block
+  (also an L7 block held by its name). The old check only looked for an A block below the A rule, never at B's rules,
+  so a block on B was missed although the known gaps said FQDN allows were reported.
+- "B allows more than A" is a review section, never a gap.
+- Other checks: OSPF "default-information originate always" on A is an outage item (with A's firewalls up and its
+  internet down, inside traffic keeps going to A). Both outage cases are listed (A's internet down with its firewalls
+  up: shut A's shared interfaces first; A's firewalls lost). B NAT lines that use a public block routed to A's ISP are
+  one dependency item with their count, which packet-tracer cannot prove.
+- Reference views: every A NAT line and every A rule name (also inactive rules and rules with no lines) with B's
+  match and the result, and the missing objects marked needed or not needed by what the gap list uses.
+- Safety: no output may hold an any-to-any permit, a Block* rule as an allow, a placeholder public object, or
+  `no nat` for a B rule that carries traffic today. The guard strips a live `no nat` from every output (the backhaul
+  identity step is now an FMC edit with show commands).
+
 Timing and safety:
 
 - Every fix is Fix before failover, Do during failover, Check on the firewall or Review later, by whether it could
@@ -105,6 +150,9 @@ Timing and safety:
 - Tests: tests/test_054 and tests/test_054b (28 cases for the corrections above, made-up names and documentation
   addresses, each failing on the first 0.5.4 commit). Three test_054 cases follow the new rules: an L7 allow-all from a
   zone is coverage (7c), a NAT check item gives show commands (15), a sibling-only NAT gap is not reported (17b).
+  tests/test_054c covers the gap list (one or more cases per numbered behaviour, plus a guard that fails on any
+  any-to-any permit, Block* allow, placeholder public object or live `no nat`). Three test_054b backhaul cases now
+  expect the FMC edit instead of `no nat` plus a new line.
 
 ## 0.5.3 – 2026-11-03
 

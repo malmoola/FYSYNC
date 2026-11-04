@@ -99,7 +99,14 @@ The report starts with the firewall names (A = the site that fails, B = the site
 their real names below) and a short **How to read this report** (ready, not ready, check on firewall, thing to fix,
 your choice needed, scope, translated address).
 
-The **Takeover** tab and the report open on a runbook, in this order: **Fix before failover**, **Do during failover**
+The report and the web UI open on the **gap list**: only what B is missing compared to A, one row per gap, with the
+columns Gap, When, Address, Object, A (line), B today (line), Required on B and Config. When says when to make the
+change: Now, Now disabled (add it disabled, enable it at outage), At outage, Decision, Confirm use, If route needed,
+Compare in FMC or Only if allow-listed. The verdict counts are the rows. Below the table: the steps for both outage
+cases (A's internet down with its firewalls up, and A's firewalls lost), a review list of what B allows beyond A (not
+gaps), every A NAT line and every A rule with B's match, and the missing objects (needed or not).
+
+The **Takeover** tab and the older view below the gap list show a runbook, in this order: **Fix before failover**, **Do during failover**
 (for example no shutdown on interfaces that are shut on B), **Check on the firewall** (for example a route B may learn
 by OSPF: run the given `show route` first), **Review later** (B allows more than A, objects with extra entries on B,
 networks that belong to B itself) and **Can't be proven from this config**. The verdict sentence counts each group.
@@ -244,7 +251,7 @@ Command line equivalents (repeatable flags, same keys as the profile): `--profil
 
 | # | Gap | Impact | Workaround |
 |---|---|---|---|
-| 1 | Application, URL, user and SGT conditions are not compared | Allow/trust rules with such conditions are compared as plain L3/L4 permits (wider than reality); block rules with them are left out. FMC snapshot: the rule name is listed in the warnings. | Check those rules by hand in FMC. |
+| 1 | Application, URL, user and SGT conditions are not compared | Allow/trust rules with such conditions are compared as plain L3/L4 permits (wider than reality); block rules with them are left out. An L7 rule that shows as any to any in LINA is never copied, never a match and never coverage: it is a "Compare in FMC" item. FMC snapshot: the rule name is listed in the warnings. | Check those rules by hand in FMC. |
 | 2 | FlexConfig, Security Intelligence and tunnel endpoints are not read from FMC | A FlexConfig ACL or an SI block list changes the real result. Prefilter rules and the tunnel default are read (fastpath = trust, block = deny); tunnel rules match by encapsulation only, not by tunnel endpoint zones. | Compare the LINA backup (show running-config) as well when FlexConfig or SI block lists are used. |
 | 3 | IPv6 is ignored | IPv6 objects, rules and routes are skipped (warning per object). | Review IPv6 rules separately. |
 | 4 | FQDN, dynamic and geolocation objects have no addresses | Rules that use them match nothing in the compare (reported as unknown object or empty). | Resolve them by hand; fwsync lists the object names. |
@@ -255,7 +262,16 @@ Command line equivalents (repeatable flags, same keys as the profile): `--profil
 | 9 | Policy-only compare has no routing | Without a device, zone names stand in for interfaces: routing readiness, PAT and public IP results are not meaningful. | Compare devices (fmc:device:NAME) for routing and NAT. |
 | 10 | Source ports, time ranges, VLAN tags, intrusion/file policy and logging are not compared | Two rules that differ only in these are reported as the same. | Check rule details in FMC for critical rules. |
 | 11 | FTD LINA rules with L7 conditions show "action unknown (L7)" | In a LINA backup the real action of such a rule is only in FMC. | Use an FMC snapshot of the same device. |
-| 12 | Dynamic routing is listed, not evaluated | BGP/OSPF learned routes are not part of routing readiness (only connected and static). | Add what-if routes (--whatif-route) for prefixes learned by BGP. |
+| 12 | Dynamic routing is listed, not evaluated | BGP/OSPF learned routes are not part of routing readiness (only connected and static). When B runs OSPF or BGP, a missing static route is a "Check on the firewall" item, not a thing to fix. | Run the show route command each check item gives, or add what-if routes (--whatif-route) for learned prefixes. |
+| 13 | Before / during failover is judged from the config only | Whether a fix could change traffic that works today comes from the routes and interface state in the config (a route on a shut interface is not installed). Learned routes and real traffic are not seen. | Check the hit counts (show access-list, show nat detail) of a "Fix before failover" NAT or route on B before making it. |
+| 14 | FQDN objects are matched by name or FQDN and port | Their addresses are not resolved. An A FQDN allow is reported when B has no rule naming the same FQDN and B's first rule for that traffic is a block (also an L7 block held by its name, and the default action), or when an A block below it would take its traffic. A B allow with any on the FQDN side counts as allowing it. | Resolve critical FQDN objects by hand. |
+| 15 | Site translation pairs private subnets only | A site-specific subnet is paired only when both sides are private and the same size; other twins are compared as they are. | Set the interface map, or compare the twin servers by hand. |
+| 16 | FMC reach and server start-up are not in any config | Where FMC lives, whether it can deploy to B when A is lost, and how the servers on shared networks start at B are listed as items to prove, with a go/no-go for FMC reach. | Confirm them before the takeover window. |
+| 17 | An L7 allow-all is trusted by its shape and name only | A permit ip from a source zone to any, with a name that does not suggest a block, is taken to allow the narrower rules below it; its URL or application conditions are not visible, so each such row says "confirm in FMC". | Open the L7 rule in FMC and check that its conditions allow that traffic. |
+| 18 | VPN pools are paired by order | A's ip local pool maps to B's pool in the order they are defined (or to B's only pool). | With several pools on each side, check that each new rule names the right B pool. |
+| 19 | The NAT walk places a subnet by B's routes | Where an A subnet lives on B comes from B's connected interfaces (also shut ones), then B's static routes, then the interface map, then inside. A NAT limited to a service matches only the same service; a destination rule matches only when the A destination is inside it. Learned routes are not seen. | Check the reference view "Every A NAT line" for a subnet placed on the wrong interface. |
+| 20 | A public block "routed to A's ISP" is A's outside subnet | A B NAT whose public address is in A's outside subnet (and not in B's) depends on A's ISP routing that block to B at outage. Other public blocks routed to A by the ISP are not visible in a config. | Confirm every public block with the ISP; packet-tracer cannot prove it. |
+| 21 | Rule and NAT gaps follow the LINA view of an FTD | A Block* rule that shows permit is taken as an L7 block, an L7 rule with any (or a /8 or wider) on a side is "Compare in FMC", and other L7 rules are copied in FMC with their conditions. | Compare the L7 rules in FMC, or use an FMC snapshot. |
 
 ## Tests
 

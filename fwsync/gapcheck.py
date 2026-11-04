@@ -142,14 +142,15 @@ def backhaul_identity(ctx, out):
             line, m.real_ref), detail, 'Change it during failover, when %s comes up; failback puts it back.' %
             ', '.join(shut), 'during', m.real_ref,
             ['During failover: Devices > NAT > %s > edit line %d: Interface Objects: Source %s instead of %s; Insert In '
-             'Category After Auto NAT%s. Then Deploy.' % (ctx.natp, line, ', '.join(shut), m.real_ifc,
-                                                         ' (below %s)' % notes if notes else '')],
-            ['no ' + m.line] + new,
+             'Category After Auto NAT%s. Then Deploy. The rule then reads: %s' % (
+                 ctx.natp, line, ', '.join(shut), m.real_ifc, ' (below %s)' % notes if notes else '', ' / '.join(new))],
+            ['show nat detail | include %s' % m.real_ref],
             ['show nat detail | include %s' % m.real_ref] + ['packet-tracer input %s tcp %s 40000 8.8.8.8 443' % (
                 i, sample(m.real & dict(route_split(B, m.real)).get(i, m.real))) for i in shut[:1]],
             {'fmc': ['Devices > NAT > %s > edit the rule for %s: Source %s again, Insert In Category Before Auto NAT '
-                     'where it was (above the published servers\' rules), then Deploy.' % (ctx.natp, m.real_ref, m.real_ifc)],
-             'cli': ['no ' + x for x in new] + [_back(B, m, m.real_ifc)]})
+                     'where it was (above the published servers\' rules), then Deploy. The rule then reads: %s' % (
+                         ctx.natp, m.real_ref, m.real_ifc, _back(B, m, m.real_ifc))],
+             'cli': ['show nat detail | include %s' % m.real_ref]})
 
 
 def nat_ifc_mismatch(ctx, out):
