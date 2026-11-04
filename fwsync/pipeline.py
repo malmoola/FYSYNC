@@ -1,12 +1,14 @@
 """Configs in, compare result out. Modes: 1:1 (A -> B) and 2:1 (A1 + A2 -> B). The profile is optional:
 whatever it leaves empty is auto-detected. User controls (fwsync.controls) are applied around the compare."""
+import re
 from pathlib import Path
 
-from . import controls, ignore
+from . import controls, ignore, sitemap
 from .adapters import load
 from .chain import build, order_edge
 from .compare import compare, counts, summary
 from .detect import detect, route_table
+from .netset import IPSet
 from .osutil import read_text
 from .profile import Profile
 
@@ -43,6 +45,7 @@ def run(a_list, b, prof=None, parts=None):
     prof = prof or Profile()
     As = [load(t, n) for t, n in a_list]
     B = load(*b)
+    B.pools = [IPSet.parse('%s-%s' % m) for m in re.findall(r'^ip local pool \S+ (\S+)-(\S+) mask', b[0], re.M)]
     apply_decisions(prof)
     roles_a = prof.roles_a or {}
     ign = ignore.ignored_names(prof) | {k for k, v in roles_a.items() if v == 'ignore'}
@@ -69,11 +72,26 @@ def run(a_list, b, prof=None, parts=None):
         A = As[0]
         tagged = ((A, ''),)
         controls.apply_rule_actions(A, prof, '')
+        controls.apply_rule_actions(B, prof, 'B')
         ignore.apply(A, ign)
         src_prefixes = prefixes([(A, 'A'), (B, 'B')])
     else:
         raise ValueError('give one A config (1:1) or two (2:1)')
+    user_scope = bool(prof.scope)
     prof, info = detect(A, B, prof)
+    pairs = sitemap.net_pairs(A, B, prof.interface_map)
+    for n in sorted(prof.scope):
+        prof.scope_names.setdefault(n, n)
+    if pairs:
+        sitemap.translate(A, pairs)
+        names = {}
+        for pa, pb in pairs:
+            names[pb] = '%s (A %s)' % (prof.scope_names.get(pa, pa), pa)
+        prof.scope = list(dict.fromkeys(sitemap.map_prefix(p, pairs) for p in prof.scope))
+        prof.scope_names.update(names)
+        for c in info['scope_candidates']:
+            c['subnet'] = sitemap.map_prefix(c['subnet'], pairs)
+    info['net_pairs'] = pairs
     for p, n in (prof.scope_add or {}).items():
         if p not in prof.scope:
             prof.scope.append(p)
@@ -107,6 +125,12 @@ def run(a_list, b, prof=None, parts=None):
     res['warnings'] = (A.warnings[:50], B.warnings[:50])
     from . import findings, gaps
     findings.build(res, prof, A, B, info)
+    if len(a_list) == 1 and A.vendor != 'fmc' and B.vendor != 'fmc':
+        from . import settings
+        prof.ignored_ifcs = set(A.ignored)
+        res.update(settings.build(a_list[0][0], b[0], A, B, prof, pairs, sitemap.edge_pairs(A, B, prof.interface_map, prof.outside_a),
+                                  res.get('names', {'A': 'A', 'B': 'B'})))
+        res['verdict'] = settings.verdict(res, res.get('names', {'A': 'A', 'B': 'B'}))
     res['gaps_area'] = 'fmc' if 'fmc' in (A.vendor, B.vendor) or any(a.vendor == 'fmc' for a in As) else 'lina'
     res['known_gaps'] = gaps.ranked(res['gaps_area'])
     return res, A, B, prof

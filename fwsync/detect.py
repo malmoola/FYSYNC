@@ -78,6 +78,22 @@ def main_ifc(cfg, ipset):
     return max(parts, key=lambda x: x[1].size())[0] if parts else ''
 
 
+def specific_ifc(cfg, ipset):
+    """the one interface all of ipset is routed to by a non-default route, else None"""
+    if ipset is None or ipset.is_any() or not ipset:
+        return None
+    hit = set()
+    rest = ipset
+    for r in route_table(cfg):
+        if r['plen'] == 0 or not rest:
+            continue
+        part = rest & r['set']
+        if part:
+            hit.add(r['ifc'])
+            rest = rest - part
+    return hit.pop() if not rest and len(hit) == 1 else None
+
+
 def roles(cfg):
     """{nameif: (role, reason)}: outside = holds the default route or the public mapped side of a NAT"""
     u = {n: i for n, i in usable_ifcs(cfg).items() if n not in cfg.ignored}
@@ -129,15 +145,16 @@ def friendly(cfg, cidr, ifc, kind, idx):
 
 
 def scope_candidates(cfg, rl):
-    """every inside subnet (connected + routed), with friendly names"""
+    """every subnet the firewall serves: connected and routed, on any interface except the internet links"""
     idx = _name_index(cfg)
     out, seen = [], set()
+    exits = {r.ifc for r in cfg.routes if r.network == '0.0.0.0' and r.mask == '0.0.0.0'}
     for ifc, (role, why) in rl.items():
-        if role != 'inside':
-            continue
         for cidr, kind in ifc_subnets(cfg, ifc):
             if cidr in seen:
                 continue
+            if ifc in exits and (kind == 'connected' or is_public(IPSet.parse(cidr))):
+                continue                                # the internet link itself and hosts behind it
             seen.add(cidr)
             out.append({'subnet': cidr, 'ifc': ifc, 'kind': kind, 'name': friendly(cfg, cidr, ifc, kind, idx)})
     return out
@@ -208,6 +225,36 @@ def _connected(cfg, name):
     return str(_net(i.ip, i.mask)) if i is not None and i.ip else ''
 
 
+def _hosts(cfg, name):
+    i = cfg.interfaces.get(name)
+    if i is None or not i.ip:
+        return {}, None
+    net = _net(i.ip, i.mask)
+    out = {}
+    for o in cfg.objects.values():
+        if o.kind == 'host' and len(o.addrs.hosts()) == 1:
+            ip = ipaddress.IPv4Address(o.addrs.hosts()[0])
+            if ip in net:
+                out[int(ip) - int(net.network_address)] = str(ip)
+    return out, net
+
+
+def _host_twin(A, B, a, rb, taken):
+    """a site-specific twin: an unclaimed B subnet of the same size holding at least two of the same host numbers"""
+    ha, na = _hosts(A, a)
+    best = None
+    for b in rb:
+        if b in taken:
+            continue
+        hb, nb = _hosts(B, b)
+        if nb is None or nb.prefixlen != getattr(na, 'prefixlen', -1):
+            continue
+        same = sorted(set(ha) & set(hb))
+        if len(same) >= 2 and (best is None or len(same) > len(best[1])):
+            best = (b, same)
+    return (best[0], ', '.join('.%d' % x for x in best[1][:4])) if best else ''
+
+
 def map_interfaces(A, B, ra, rb):
     """the same connected subnet is the strongest match, whatever the name or role; a name match with different
     subnets, or a fallback match, is kept but flagged"""
@@ -216,12 +263,20 @@ def map_interfaces(A, B, ra, rb):
     for n in rb:
         if _connected(B, n):
             by_net.setdefault(_connected(B, n), n)
+    taken = {by_net[_connected(A, a)] for a in ra if _connected(A, a) in by_net}
+    taken |= {b for b in rb for a in ra if a.lower() == b.lower() and _connected(A, a) not in by_net}
     for a, (role, why) in ra.items():
         net = _connected(A, a)
         if net and net in by_net:
             b = by_net[net]
             rows.append({'a': a, 'a_role': role, 'a_reason': why, 'b': b, 'b_role': rb[b][0], 'how': 'same subnet',
                          'flag': '', 'note': ''})
+            continue
+        twin = '' if a.lower() in {b.lower() for b in rb} else _host_twin(A, B, a, rb, taken)
+        if twin:
+            taken.add(twin[0])
+            rows.append({'a': a, 'a_role': role, 'a_reason': why, 'b': twin[0], 'b_role': rb[twin[0]][0],
+                         'how': 'same host numbers (%s)' % twin[1], 'flag': '', 'note': ''})
             continue
         cands = [n for n, (r, w) in rb.items() if r == role]
         b, how, flag = _match_b(a, A, B, cands, role)

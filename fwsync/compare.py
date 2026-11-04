@@ -117,6 +117,18 @@ def _slices(r, scope):
     return out
 
 
+def _b_path(r, B, prof):
+    """interfaces this traffic uses on B: the mapped ones, unless B routes the addresses elsewhere (Azure sits behind
+    a tunnel on B and behind inside on A)"""
+    from .detect import specific_ifc
+    si, di = prof.map_ifc(r.src_ifc), prof.map_ifc(r.dst_ifc)
+
+    def real(ifc, addrs):
+        i = B.interfaces.get(ifc)
+        return ifc if not ifc or i is None or i.planned else (specific_ifc(B, addrs) or ifc)
+    return real(si, r.src), real(di, r.dst)
+
+
 def compare_rules(A, B, prof):
     scope = prof.scope_set()
     b_rules = effective_rules(B)
@@ -127,12 +139,16 @@ def compare_rules(A, B, prof):
         slices = _slices(r, scope)
         if not slices:
             continue
-        si, di = prof.map_ifc(r.src_ifc), prof.map_ifc(r.dst_ifc)
+        si, di = _b_path(r, B, prof)
         results = []
         for label, s, d in slices:
             st, matched, det = eval_slice(b_rules, si, di, s, d, r.svc)
             results.append((label, st, matched, det))
         worst = max(results, key=lambda x: ORDER.index(x[1]))
+        twin = _same_on_b(r, b_rules, si, di)
+        if twin is not None and worst[1] == 'partial':
+            results = [(label, 'covered', [twin], 'same rule on B') for label, s, d in slices]
+            worst = results[0]
         out.append({
             'id': 'R%d' % r.seq, 'path': getattr(r, 'path', ''), 'policy': r.policy, 'rule': r.rule_name, 'rule_id': r.rule_id,
             'action': r.action, 'src_ifc': r.src_ifc or 'any', 'dst_ifc': r.dst_ifc or 'any',
@@ -237,6 +253,15 @@ def compare_rules_reverse(A, B, prof):
     return out
 
 
+def _same_on_b(r, b_rules, si, di):
+    """the identical permit on B: extra narrow B blocks are reported by the block checks, not on every broad rule"""
+    for x in b_rules:
+        if x.action in PERMIT and x.src_ifc == si and x.dst_ifc == di and _same_addr(r.src, x.src, r.src_ref, x.src_ref) \
+                and _same_addr(r.dst, x.dst, r.dst_ref, x.dst_ref) and repr(r.svc.items) == repr(x.svc.items):
+            return x
+    return None
+
+
 def _same_addr(a, b, a_ref, b_ref):
     """equal addresses; 'any' on both sides also counts (an ignored interface narrows A's copy of any)"""
     return a == b or a_ref == b_ref == 'any'
@@ -272,14 +297,15 @@ def compare_firewide(A, B, prof):
     for name, rs in seen.items():
         out.append({'id': 'FW-D-%s' % name, 'check': 'A block missing on B', 'status': 'missing', 'item': name,
                     'detail': '%d line(s), e.g. %s' % (len(rs), rs[0].line), 'line': getattr(rs[0], 'lineno', 0)})
-    b_mapped = IPSet()
+    b_mapped, b_real = IPSet(), IPSet()
     for n in B.nats:
         if n.kind == 'static' and n.mapped is not None and not n.mapped.is_any() and n.mapped != n.real:
-            b_mapped = b_mapped | n.mapped
+            b_mapped, b_real = b_mapped | n.mapped, b_real | n.real
     outs = set(prof.outside_a)
     for n in A.nats:
         if n.kind != 'static' or n.inactive or n.mapped is None or n.mapped.is_any() or n.mapped == n.real \
-                or n.mapped_ifc not in outs or not is_public(n.mapped) or n.mapped.issubset(b_mapped):
+                or n.mapped_ifc not in outs or not is_public(n.mapped) or n.mapped.issubset(b_mapped) \
+                or n.real.issubset(b_real):
             continue
         out.append({'id': 'FW-N-%s' % repr(n.mapped), 'check': 'published on A, no NAT on B', 'status': 'missing',
                     'item': repr(n.mapped), 'detail': '%s (%s) -> %s' % (n.real_ref, repr(n.real), n.mapped_ref),
@@ -669,6 +695,11 @@ def compare_routing(A, B, prof):
             rank = ['ok', 'other inside interface', 'other outside interface', 'wrong way', 'no route on B']
             if rank.index(st) > rank.index(worst):
                 worst = st
+        own = next((n for n, i in B.interfaces.items() if i.ip and s.issubset(IPSet.net(i.ip, i.mask)) and
+                    ra.get(a_ifc, ('',))[0] == 'inside' and rb.get(n, ('',))[0] == 'outside'), None)
+        pool = any(s.overlaps(x) for x in getattr(B, 'pools', []))
+        if own or pool:
+            worst, desc = 'ok', ['belongs to B itself (%s)' % (own or 'VPN pool')]
         nh = [r for r in _routes_for(B, s)]
         out.append({'id': 'RT-%s' % p, 'scope': prof.scope_names.get(p, p), 'scopes': [p], 'subnet': p,
                     'a_ifc': a_ifc, 'a_role': want_role, 'expected_b_ifc': want, 'b_route': '; '.join(desc),
@@ -709,7 +740,8 @@ def compare_objects(A, B, prof):
         b = B.objects.get(bname)
         if b is not None:
             bv = b.addrs if b.kind != 'group' else _group_addrs(B, b)
-            st = 'same' if bv == addrs else 'same name, different value'
+            same = bv == addrs or bv == getattr(o, 'raw_addrs', None)         # B may name A's own address on purpose
+            st = 'same' if same else 'same name, different value'
             other = repr(bv) if st != 'same' else ''
         else:
             names = by_val.get(addrs, []) if o.kind != 'group' else []

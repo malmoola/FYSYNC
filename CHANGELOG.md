@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.3 – 2026-11-03
+
+Takeover check: can B carry the traffic when A fails.
+
+- Default scope is every subnet the firewall serves, not only interfaces classed as inside.
+- Site translation: site-specific subnets are matched (same subnet, then name, then shared host numbers) and A is
+  rewritten into B's addresses before the compare, so rules, NAT and objects are judged as they must be on B.
+- Traffic follows B's routes: a source behind a tunnel on B is checked on that tunnel.
+- A broad L7 rule whose name says block no longer covers everything on B, which hid real gaps.
+- New whole-config compare with a coverage ledger: interfaces, OSPF, policy routing, path tracking, HA, VPN, AAA, DNS,
+  inspection, certificates, management, logging, SNMP, timeouts. Every running-config line lands in one category.
+- Every A object is listed with its translated value and its match on B.
+- New Takeover tab, report section and CSV exports. Shut interfaces, missing standby IPs, missing PBR, OSPF networks and
+  items a config cannot prove are listed with an action.
+
 ## 0.5.2 – 2026-11-03
 
 Accuracy fixes from a real FTD pair.

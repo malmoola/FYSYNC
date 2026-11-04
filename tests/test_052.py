@@ -89,11 +89,32 @@ def test_pat_any_exit_and_any_source():
     assert {x['side']: x['status'] for x in res['pat']} == {'A': 'covered', 'B': 'covered'}
 
 
-def test_routing_names_real_route_and_no_static_fix():
+def test_site_subnet_is_translated_not_routed():
     res = go(scope=['10.5.1.0/24'])[0]
-    f = [x for x in res['findings'] if x['category'] == 'routing'][0]
-    assert 'to the internet' not in f['what'] and '10.0.0.0/8' in f['what'] and 'different subnet' in f['what']
-    assert f['fix']['cli'][0].startswith('!')
+    assert res['scope'] == ['10.5.2.0/24'] and ('10.5.1.0/24', '10.5.2.0/24') in res['detected']['net_pairs']
+    assert not [x for x in res['findings'] if x['category'] == 'routing']
+
+
+def test_default_scope_is_every_subnet_and_ledger_is_complete():
+    res = go()[0]
+    assert {'10.9.1.0/24', '10.5.2.0/24', '192.0.2.0/24'} <= set(res['scope'])
+    total = sum(x['a_lines'] for x in res['coverage'])
+    assert total == len([x for x in A.splitlines() if x.strip()])
+    assert 'verdict' in res and res['takeover'][-1]['severity'] == 'verify'
+
+
+def test_broad_l7_block_does_not_hide_gaps():
+    cfg = B.replace('access-list CSM_FW_ACL_ advanced permit ip ifc inside any any rule-id 3',
+                    'access-list CSM_FW_ACL_ remark rule-id 3: L7 RULE: Blocked Countries\n'
+                    'access-list CSM_FW_ACL_ advanced permit ip any any rule-id 3')
+    res = run([(A, 'a')], (cfg, 'b'), {'scope': ['10.0.1.0/24']})[0]
+    assert [r for r in res['rules'] if r['status'] != 'covered']
+
+
+def test_shut_interface_is_a_blocker():
+    cfg = B.replace(' nameif dmz2\n', ' shutdown\n nameif dmz2\n')
+    t = run([(A, 'a')], (cfg, 'b'))[0]['takeover']
+    assert t[0]['severity'] == 'blocker' and 'dmz2' in t[0]['title']
 
 
 def test_identical_permit_not_over_permitted():

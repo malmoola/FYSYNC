@@ -10,6 +10,9 @@ SECTIONS = [('rules', 'Access rules A -> B', ['id', 'path', 'scope', 'status', '
                                             'dst_ifc', 'b_src_ifc', 'b_dst_ifc', 'src', 'dst', 'service', 'direction', 'detail',
                                             'b_rules']),
             ('firewide', 'Whole-firewall checks (not limited to the scope)', ['id', 'check', 'status', 'item', 'detail', 'line']),
+            ('settings', 'Settings that differ, after translation', ['id', 'category', 'impact', 'side', 'stanza', 'line']),
+            ('objects_all', 'Every A object', ['id', 'status', 'kind', 'in_use', 'name', 'a_value', 'translated', 'b_name', 'b_value']),
+            ('coverage', 'Coverage: where every config line was compared', ['category', 'a_lines', 'b_lines', 'how', 'differences', 'impact', 'why']),
             ('held_rules', 'Rules held out of the compare (L7 action unknown by name, or marked block)',
              ['id', 'path', 'scope', 'status', 'rule', 'src_ifc', 'dst_ifc', 'src', 'dst', 'service', 'detail']),
             ('b_rules', 'Access rules B -> A (over-permitted = B allows more than A)',
@@ -89,6 +92,7 @@ def write_html(res, path, title='fwsync report'):
            '<h1>%s</h1><p class=small>%s &rarr; %s &middot; %d scope subnets &middot; mode %s</p>' % (
                e(title), e(n['A']), e(n['B']), len(res['scope']), e(res.get('mode', '1:1')))]
     out += readiness_html(res)
+    out += takeover_html(res)
     out += firewide_html(res)
     out += findings_html(res)
     out += decisions_html(res)
@@ -123,6 +127,20 @@ def write_html(res, path, title='fwsync report'):
     out.append("""<script>function flt(i){const t=i.closest('table'),c=[...t.rows[1].cells].map(x=>x.firstChild.value.toLowerCase());
 for(const r of [...t.rows].slice(2)){r.style.display=c.every((v,k)=>!v||r.cells[k].textContent.toLowerCase().includes(v))?'':'none'}}</script>""")
     Path(path).write_text('\n'.join(out), encoding='utf-8')
+
+
+def takeover_html(res):
+    e = html.escape
+    v = res.get('verdict')
+    if not v:
+        return []
+    out = ['<h2>Takeover check</h2><p class="verdict %s">%s</p><table><tr><th>area</th><th>open</th></tr>' % (
+        'ok' if v['ready'] else 'no', e(v['text']))]
+    out += ['<tr><td>%s</td><td>%d</td></tr>' % (e(a['area']), a['open']) for a in v['areas']]
+    out.append('</table><h3>What must be true on the surviving site</h3><table><tr><th>severity</th><th>area</th><th>what</th><th>detail</th><th>action</th></tr>')
+    for t in res.get('takeover', []):
+        out.append('<tr>%s</tr>' % ''.join('<td>%s</td>' % e(t[k]) for k in ('severity', 'area', 'title', 'detail', 'action')))
+    return out + ['</table>']
 
 
 def firewide_html(res):

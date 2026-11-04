@@ -201,10 +201,11 @@ A1 <input type=text name=a1_path size=34> A2 <input type=text name=a2_path size=
 Profile path (JSON or YAML) <input type=text name=profile_path size=50></details>
 </fieldset><button type=submit>Compare</button> <span id=busy class=mut></span></form>
 
-<nav id=nav class="tabs hide"><button data-v=readiness class=on>Readiness</button><button data-v=findings>Findings</button>
+<nav id=nav class="tabs hide"><button data-v=takeover class=on>Takeover</button><button data-v=readiness>Readiness</button><button data-v=findings>Findings</button>
 <button data-v=decisions>Decisions</button><button data-v=plan>Remediation plan</button><button data-v=setup>Setup</button>
 <button data-v=details>Details (advanced)</button></nav>
-<section id=v-readiness class=view></section>
+<section id=v-takeover class=view></section>
+<section id=v-readiness class="view hide"></section>
 <section id=v-findings class="view hide"><p><select id=fcat><option value="">all categories</option><option>routing</option><option>pat</option>
 <option>inbound</option><option>rules</option><option>objects</option></select> <select id=fscope><option value="">all subnets</option></select>
 <select id=fstate><option value="">open + fix + later</option><option>open</option><option>fix</option><option>later</option><option>not needed</option></select>
@@ -247,7 +248,7 @@ reason <input type=text id=breason size=20> <button type=button class=sec id=bap
 <h3>LINA / ASA CLI (reference)</h3><pre id=cli></pre><h3>Change list</h3><pre id=chg></pre>
 </section>
 <script>
-const COLS={rules:['id','path','scope','status','action_check','rule','intersected_with','src_ifc','dst_ifc','src','dst','service','detail'],
+const COLS={settings:['id','category','impact','side','stanza','line'],objects_all:['id','status','kind','in_use','name','a_value','translated','b_name','b_value'],firewide:['id','check','status','item','detail'],rules:['id','path','scope','status','action_check','rule','intersected_with','src_ifc','dst_ifc','src','dst','service','detail'],
 held_rules:['id','path','scope','status','rule','src_ifc','dst_ifc','src','dst','service','detail'],
 b_rules:['id','scope','status','rule','src_ifc','dst_ifc','src','dst','service','a_rules'],
 nat:['id','scope','status','kind','a_ifc','real_ref','real','a_mapped','a_dst','b_mapped','proposed_b_mapped','detail'],
@@ -270,11 +271,18 @@ fd.append('overrides',JSON.stringify(withEdits?edits():(LOADED||{})));
 $('busy').textContent='comparing...';const r=await fetch('/api/compare',{method:'POST',body:fd});$('busy').textContent='';
 if(!r.ok){alert(await r.text());return}R=await r.json();R.planned=R.planned||[];P=JSON.parse(JSON.stringify(R.profile_used));sel.clear();showDet();showSum();tabs();draw();renderAll()}
 $('f').onsubmit=e=>{e.preventDefault();go(false)};$('rerun').onclick=()=>go(true);
-let VIEW='readiness';
+let VIEW='takeover';
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>show(b.dataset.v));
 function show(v){VIEW=v;document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x.dataset.v==v));
 document.querySelectorAll('.view').forEach(s=>s.classList.toggle('hide',s.id!='v-'+v))}
-function renderAll(){$('nav').classList.remove('hide');readinessView();fillScopes();findingsView();decisionsView();planView();show(VIEW)}
+function tbl(cols,rows){return '<table><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr>'+rows.map(r=>'<tr>'+cols.map(c=>`<td>${esc(String(r[c]??''))}</td>`).join('')+'</tr>').join('')+'</table>'}
+function takeoverView(){const v=R.verdict;if(!v){$('v-takeover').innerHTML='<p class=mut>Takeover check needs two LINA configs in 1:1 mode.</p>';return}
+let h=`<h2>Can B take over?</h2><p class="verdict ${v.ready?'ok':'no'}">${esc(v.text)}</p>`+tbl(['area','open'],v.areas);
+h+='<h3>What must be true on the surviving site</h3>'+tbl(['severity','area','title','detail','action'],R.takeover||[]);
+h+=`<h3>Whole-firewall checks (${(R.firewide||[]).length})</h3>`+tbl(['check','item','detail'],R.firewide||[]);
+h+='<h3>Coverage: where every config line was compared</h3>'+tbl(['category','a_lines','b_lines','how','differences','impact','why'],R.coverage||[]);
+$('v-takeover').innerHTML=h}
+function renderAll(){$('nav').classList.remove('hide');takeoverView();readinessView();fillScopes();findingsView();decisionsView();planView();show(VIEW)}
 const STC={'Ready':'st-ok','Action needed':'st-act','Decision needed':'st-dec'};
 const CATS={'Routing':['routing'],'Outbound internet (PAT)':['pat'],'Published servers (inbound)':['inbound'],'Access rules':['rules','objects'],'DNS changes':['inbound'],'Public IPs':[]};
 function readinessView(){const n=R.names;let h=`<h2>Readiness</h2><p class=mut>${esc(n.A)} &rarr; ${esc(n.B)}</p>`+R.readiness.map(c=>`<p class="verdict ${c.ready?'ok':'no'}">${esc(c.verdict)}</p>`).join('');

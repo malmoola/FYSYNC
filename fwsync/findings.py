@@ -447,8 +447,8 @@ def pat_findings(ctx):
     pats = {(x['side'], x['subnet']): x for x in ctx.res.get('pat', [])}
     for p in ctx.prof.scope:
         b, a = pats.get(('B', p)), pats.get(('A', p))
-        if not b or b['status'] == 'covered' or b.get('row_state'):
-            continue
+        if not b or b['status'] == 'covered' or b.get('row_state') or (a and a['status'] == 'missing'):
+            continue                                    # no outbound NAT on A either: nothing to carry over
         s = IPSet.parse(p)
         name = ctx.label(p)
         key = _key('pat', p)
