@@ -103,6 +103,10 @@ The **Takeover** tab and the report open on a runbook, in this order: **Fix befo
 (for example no shutdown on interfaces that are shut on B), **Check on the firewall** (for example a route B may learn
 by OSPF: run the given `show route` first), **Review later** (B allows more than A, objects with extra entries on B,
 networks that belong to B itself) and **Can't be proven from this config**. The verdict sentence counts each group.
+A fix goes in the group that matches whether it could change traffic that works today: a static route that would move
+live traffic is a during-failover step, and a NAT that would change live traffic is created disabled with an enable
+step. Where the tool cannot be sure, the item says what to check and gives no command. **Failback** lists one step per
+during-failover change, in reverse order.
 
 **Readiness** shows one line per network, not-ready first, then check-first, then ready:
 `192.0.2.0/24 (VLAN 20 dmz) - Not ready: 1 thing to fix`, `... - Check on firewall: 1 thing to verify`, `... - Ready`,

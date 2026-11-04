@@ -3,7 +3,8 @@
 GAPS = [
     (1, 'all', 'Application, URL, user and SGT conditions are not compared',
      'Allow/trust rules with such conditions are compared as plain L3/L4 permits (wider than reality); block rules with '
-     'them are left out. FMC snapshot: the rule name is listed in the warnings.',
+     'them are left out. An L7 rule that shows as any to any in LINA is never copied, never a match and never coverage: '
+     'it is a "Compare in FMC" item. FMC snapshot: the rule name is listed in the warnings.',
      'Check those rules by hand in FMC.'),
     (2, 'all', 'FlexConfig, Security Intelligence and tunnel endpoints are not read from FMC',
      'A FlexConfig ACL or an SI block list changes the real result. Prefilter rules and the tunnel default are read '
@@ -39,6 +40,20 @@ GAPS = [
      'BGP/OSPF learned routes are not part of routing readiness (only connected and static). When B runs OSPF or '
      'BGP, a missing static route is a "Check on the firewall" item, not a thing to fix.',
      'Run the show route command each check item gives, or add what-if routes (--whatif-route) for learned prefixes.'),
+    (13, 'all', 'Before / during failover is judged from the config only',
+     'Whether a fix could change traffic that works today comes from the routes and interface state in the config '
+     '(a route on a shut interface is not installed). Learned routes and real traffic are not seen.',
+     'Check the hit counts (show access-list, show nat detail) of a "Fix before failover" NAT or route on B before '
+     'making it.'),
+    (14, 'all', 'FQDN objects are matched by name or FQDN and port',
+     'Their addresses are not resolved. An A FQDN allow is reported only when an A block below it would take its '
+     'traffic and B has no rule naming the same FQDN.', 'Resolve critical FQDN objects by hand.'),
+    (15, 'lina', 'Site translation pairs private subnets only',
+     'A site-specific subnet is paired only when both sides are private and the same size; other twins are compared '
+     'as they are.', 'Set the interface map, or compare the twin servers by hand.'),
+    (16, 'all', 'FMC reach and server start-up are not in any config',
+     'Where FMC lives, whether it can deploy to B when A is lost, and how the servers on shared networks start at B '
+     'are listed as items to prove, with a go/no-go for FMC reach.', 'Confirm them before the takeover window.'),
 ]
 
 

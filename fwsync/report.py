@@ -82,7 +82,7 @@ th,td{border:1px solid #d6dae2;padding:3px 6px;text-align:left;vertical-align:to
 .det td,.det th{font-size:12px}.flag{color:#a3141f}.small{color:#5b6474}.counts td{border:none;padding:1px 10px 1px 0}
 .map{background:#eef1f6;padding:6px 10px;border-radius:6px}.howto dt{font-weight:600}.howto dd{margin:0 0 6px 16px}
 .g-before{border-left:4px solid #a3141f}.g-during{border-left:4px solid #8a5a00}.g-check{border-left:4px solid #1f5fbf}
-.g-later,.g-unprovable{border-left:4px solid #9aa3b2}.reason{color:#5b6474;margin:2px 0 0}
+.g-later,.g-unprovable,.g-failback{border-left:4px solid #9aa3b2}.reason{color:#5b6474;margin:2px 0 0}
 input.f{width:100%;box-sizing:border-box}
 @media (max-width:700px){body{margin:8px}.part b{display:block}}"""
 
@@ -190,6 +190,13 @@ def runbook_html(res):
             out.append('<details class="item g-%s"><summary><b>%d. %s</b> &middot; %s <span class=small>(%s)</span>'
                        '</summary>%s</details>' % (e(g['key']), i, e(it['subject']), e(it['reason']), e(it['kind']),
                                                    item_html(it)))
+    fb = res.get('failback') or []
+    out.append('<h3>Failback: undo every during-failover step (%d)</h3>' % len(fb))
+    if not fb:
+        out.append('<p class=small>Nothing here.</p>')
+    for i, it in enumerate(fb, 1):
+        out.append('<details class="item g-failback"><summary><b>%d. %s</b> &middot; %s</summary>%s</details>' % (
+            i, e(it['subject']), e(it['reason']), item_html(it)))
     return out
 
 

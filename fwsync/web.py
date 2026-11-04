@@ -73,7 +73,7 @@ async def api_state(body: dict):
         prof.decision_state = body['decision_state'] or {}
     findings.build(s['res'], prof, s['A'], s['B'], s['res']['detected'])
     runbook.build(s['res'])
-    out = clean({k: s['res'][k] for k in ('findings', 'decisions', 'readiness', 'plan', 'known_gaps', 'runbook', 'verdict')})
+    out = clean({k: s['res'][k] for k in ('findings', 'decisions', 'readiness', 'plan', 'known_gaps', 'runbook', 'verdict', 'failback')})
     return JSONResponse(json.loads(json.dumps(out, default=str)))
 
 
@@ -191,7 +191,7 @@ pre{white-space:pre-wrap;border:1px solid var(--line);padding:8px;max-height:420
 .map{background:var(--head);padding:6px 10px;border-radius:6px}.howto dt{font-weight:600}.howto dd{margin:0 0 6px 16px}
 .item{border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:6px 0}.part{margin:4px 0}.part b{display:inline-block;min-width:110px}
 .g-before{border-left:4px solid var(--bad)}.g-during{border-left:4px solid var(--warn)}.g-check{border-left:4px solid var(--acc)}
-.g-later,.g-unprovable{border-left:4px solid var(--mut)}.st-chk{color:var(--acc);font-weight:600}.reason{color:var(--mut);margin:0 0 8px}
+.g-later,.g-unprovable,.g-failback{border-left:4px solid var(--mut)}.st-chk{color:var(--acc);font-weight:600}.reason{color:var(--mut);margin:0 0 8px}
 .card{min-width:min(320px,100%);box-sizing:border-box}
 @media (max-width:700px){body{margin:8px}.part b{display:block}.fb{float:none;display:block}}
 </style></head><body>
@@ -291,6 +291,7 @@ function takeoverView(){const v=R.verdict,n=R.names;
 let h=`<p class=map>A = <b>${esc(n.A)}</b> (the site that fails), B = <b>${esc(n.B)}</b> (the site that takes over). Below they are called by these names.</p>`+howto();
 if(v)h+=`<h2>Can ${esc(n.B)} take over?</h2><p class="verdict ${v.ready?'ok':'no'}">${esc(v.text)}</p>`;
 h+=(R.runbook||[]).map(g=>`<h3>${esc(g.title)} (${g.count})</h3>`+(g.items.length?g.items.map((it,i)=>`<details class="item g-${g.key}"><summary><b>${i+1}. ${esc(it.subject)}</b> &middot; ${esc(it.reason)} <span class=mut>(${esc(it.kind)})</span></summary>${parts(it)}</details>`).join(''):'<p class=mut>Nothing here.</p>')).join('');
+const fb=R.failback||[];h+=`<h3>Failback: undo every during-failover step (${fb.length})</h3>`+(fb.length?fb.map((it,i)=>`<details class="item g-failback"><summary><b>${i+1}. ${esc(it.subject)}</b> &middot; ${esc(it.reason)}</summary>${parts(it)}</details>`).join(''):'<p class=mut>Nothing here.</p>');
 h+='<details><summary>Details: open items per area, whole-firewall checks, coverage</summary>'+(v&&v.areas&&v.areas.length?'<h3>Open items per area</h3>'+tbl(['area','open'],v.areas):'');
 h+=`<h3>Whole-firewall checks (${(R.firewide||[]).length})</h3>`+tbl(['check','item','detail'],(R.firewide||[]).map(r=>Object.assign({},r,{check:L(r.check)})));
 h+='<h3>Coverage: where every config line was compared</h3>'+tbl(['category','a_lines','b_lines','how','differences','impact','why'],R.coverage||[])+'</details>';

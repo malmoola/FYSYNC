@@ -81,10 +81,11 @@ def translate(A, pairs):
     for r in A.rules:
         r.src, r.dst = map_set(r.src, pairs), map_set(r.dst, pairs)
     for n in A.nats:
+        n.raw_real = n.real
         n.real, n.mapped = map_set(n.real, pairs), map_set(n.mapped, pairs)
         n.dst_real, n.dst_mapped = map_set(n.dst_real, pairs), map_set(n.dst_mapped, pairs)
     for o in A.objects.values():
-        o.raw_addrs = o.addrs
+        o.raw_addrs, o.raw_members = o.addrs, list(o.members)
         o.addrs = map_set(o.addrs, pairs)
         o.members = [m if m.startswith('obj:') else _member(m, pairs) for m in o.members]
     for i in A.interfaces.values():

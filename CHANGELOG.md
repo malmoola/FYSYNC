@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.5.4 – 2026-11-04
+
+Remediation fixes that are safe to follow. A wrong fix is worse than no fix: where the tool cannot be sure, the item
+says what to check and gives no command.
+
+Wrong fixes:
+
+- Published servers: the proposed NAT and access rule use the interface the server is behind on B (A's real
+  interface mapped to B, or B's route for the address), never the generic inside interface. When neither is known,
+  the item is "Check first" with no NAT command.
+- An L7 rule that shows as any to any in LINA is never copied: "Compare in FMC: URL, application or geo conditions
+  are not visible", with a warning that copying it without its conditions would allow all traffic. It is never a
+  match or coverage on either side.
+- Objects: an object B already has (by name or by value) is never created again. A B object with the same name and
+  another value is used as it is, never redefined, and the item says what to check. Translated addresses use B's
+  object for that address, not A's name.
+- Edit, not add: a B NAT for the server on the wrong interface, or a B rule with the same addresses on other zones,
+  is edited. Option `any` for a NAT that must work both before and after takeover. A zone that carries traffic from
+  the other site today is kept and the new zone added; a zone that carries nothing is replaced.
+
+False positives:
+
+- Inbound rules are judged per A rule, with its real source, ports and interfaces, not from an any source; the same
+  source list and ports on B is "same", not "partial".
+- Rule status follows first match on both sides: a block A has above the permit takes that traffic on A too, so an
+  equal B block before the permit is "same". Tunnel default rules (ipinip, 41, gre, teredo) are skipped.
+- Policy routing that only sends traffic to the ISP B's default route already uses needs no action (explained).
+- Reusing A's own public IP on B in a shared range, or two B NATs for the same server, is not a conflict.
+- Site twins (each site its own server and public IP on translated addresses) read "each site has its own"; no
+  conflict, no object to create, no DNS change.
+- "Rule cannot match" is optional cleanup when another rule carries the traffic or the source only exists at A.
+- No duplicate findings (a server published by object and manual NAT is one finding) and no item without an action.
+- Object differences use expanded values before and after site translation; a group that names A's own addresses
+  on purpose is "same".
+
+New checks:
+
+- NAT first match after takeover for each published server: a broader rule above the server's rule (for example an
+  identity NAT on any interface) is flagged; when it is needed today the fix is "Do during failover" with the exact
+  new interface and section.
+- B NATs (also dynamic PAT objects) whose real addresses are not behind their real interface.
+- Outbound PAT per ISP: A has it on each ISP, B on only some; B's existing PAT address for that ISP is reused.
+- NATs a shared network lacks that A has for it or that a sibling network has on B: inside users to public, VPN pool
+  to the network, VPN pool to public addresses, identity NAT. A sibling-only gap is a check with no command.
+- FQDN rules are matched by object name (or FQDN) and port, and reported when A allows them above a block and B has
+  no match.
+- Copying a block lists the A allows above it that B lacks first, with a warning that the block alone would cut those
+  hosts off. The block is proposed disabled.
+- A block in a different place among the allow rules (above them on one side, below on the other).
+- Remote-access VPN interfaces are compared through the interface map, with each headend's interfaces and addresses.
+- Can't be proven: where FMC lives and whether it can deploy to B when A is lost (a go/no-go, also in the verdict),
+  and how the servers on shared networks start at B.
+- A B static route whose next hop is on no B subnet (not installed, so a public range is not advertised), with the
+  outbound PAT that depends on it.
+
+Timing and safety:
+
+- Every fix is Fix before failover, Do during failover, Check on the firewall or Review later, by whether it could
+  change traffic that works today. A static route that would move live traffic is a during-failover step (routes
+  cannot be added disabled). A NAT that would change live traffic is created disabled, with an enable step in the
+  runbook.
+- A route lists the A NAT exemption it depends on, with B's state.
+- New Failback list: one step per during-failover change, in reverse order (report, web UI, JSON `failback`).
+- Test commands use a host whose NAT matches the claim (not one a more specific NAT catches) and state the expected
+  NAT; a test on a shut interface says it can run only after the interface is up.
+
 ## 0.5.3 – 2026-11-03
 
 Takeover check: can B carry the traffic when A fails.

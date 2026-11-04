@@ -43,6 +43,10 @@ GLOSSARY = {
     'B only': 'Only {B} has this.',
     'same name, different value': 'The object exists on both, but {B} lacks addresses that {A} has.',
     'B has extra entries': '{B} has every address {A} has, plus more.',
+    'compare in FMC': 'An L7 rule that shows as any to any in this config: compare its conditions in FMC.',
+    'not compared (FQDN)': 'An FQDN rule with no {A} block below it: {B} may allow it with a broader rule.',
+    'wrong interface': '{B} has the NAT, but on another interface than the server is behind.',
+    'each site has its own': 'Each site has its own server and public IP for this address.',
 }
 
 # what users read instead of the internal status values (JSON keys and CSV values keep the internal ones)
@@ -245,6 +249,79 @@ class Ctx:
         self.anchor = self._anchor()
         self.specs = {}
         self.owned_map = {r['subnet']: r['b_own'] for r in res.get('routing', []) if r.get('b_own')}
+        self.bvals = self._b_values()
+        self.obj_notes = {}
+
+    def _b_values(self):
+        """B object names by expanded value (FQDN objects by name), to reuse instead of creating"""
+        from .compare import _group_addrs
+        idx = {}
+        for o in self.B.objects.values():
+            if o.name.startswith('FMC_INLINE_'):
+                continue
+            if o.kind == 'fqdn':
+                idx.setdefault('fqdn:' + o.value, []).append(o.name)
+                continue
+            v = o.addrs if o.kind != 'group' else _group_addrs(self.B, o)
+            if v:
+                idx.setdefault(repr(v), []).append(o.name)
+        return idx
+
+    def bname(self, name, addrs=None):
+        """B's name for an A object (or for addrs): (name, exists on B). An object that exists on B by value is used
+        by its B name; a B object with the same name and another value is used as it is and never redefined (the
+        finding says what to check); a translated A address not on B gets a NET_ name, not A's name."""
+        if name in ('any', 'any4'):
+            return name, True
+        o = self.A.objects.get(name)
+        if o is None and addrs is None:
+            return name, False
+        if o is not None and o.kind == 'fqdn':
+            key = 'fqdn:' + o.value
+        else:
+            v = addrs if addrs is not None else net_resolve(self.A, name)
+            key = repr(v)
+        hits = self.bvals.get(key, [])
+        if hits:
+            return (name if name in hits else sorted(hits, key=lambda x: (NOT_A_NAME.search(x) is not None, len(x), x))[0]), True
+        b = self.B.objects.get(name)
+        if b is not None:
+            from .compare import _group_addrs
+            bv = b.value if b.kind == 'fqdn' else repr(b.addrs if b.kind != 'group' else _group_addrs(self.B, b))
+            self.obj_notes[name] = ('Object %s already exists on %s with another value (%s there, %s needed): it is used '
+                                    'as it is and not redefined. Check that %s\'s value is right for this rule, or use '
+                                    'another object.' % (name, self.n['B_short'], bv, key.replace('fqdn:', ''),
+                                                         self.n['B_short']))
+            return name, True
+        if o is not None and o.kind != 'group' and getattr(o, 'raw_addrs', o.addrs) != o.addrs and len(o.addrs.cidrs()) == 1:
+            return safe('NET_%s' % o.addrs.cidrs()[0].replace('/32', '').replace('/', '_')), False
+        return name, False
+
+    def up(self, ifc):
+        i = self.B.interfaces.get(ifc)
+        return i is not None and not i.shutdown and not i.planned
+
+    def live_route(self, s, ifc=None):
+        """B's route today for all of s (routes on shut interfaces are not installed); None, or the entry when it is a
+        non-default route out of another interface than ifc: traffic for s works over it now"""
+        from .detect import route_table
+        for e in route_table(self.B):
+            if not self.up(e['ifc']):
+                continue
+            if s.issubset(e['set']):
+                return e if e['plen'] > 0 and e['ifc'] != ifc else None
+        return None
+
+    def routed_today(self, s, ifc):
+        from .detect import route_split_up
+        return any(i == ifc for i, x in route_split_up(self.B, s))
+
+    def shut_note(self, ifc):
+        """test commands on an interface that is shut down cannot run until it is up"""
+        i = self.B.interfaces.get(ifc)
+        if i is not None and i.shutdown:
+            return ['Not testable yet: %s is shut down on %s. Run these after it is brought up.' % (ifc, self.n['B_short'])]
+        return []
 
     def _anchor(self):
         """first broad B access permit (e.g. Site-Default-Out) and its section: new rules go above it"""
@@ -355,9 +432,12 @@ def addr_names(r, side):
     return ['any'] if ref in ('any', 'any4') else [x.strip() for x in (ref or 'any').split(', ')]
 
 
-def cli_addr(cfg, name):
+def cli_addr(cfg, name, b=None):
+    """LINA address of a name; b = the B config: an object that exists there is referenced by its B kind"""
     if name == 'any':
         return 'any'
+    if b is not None and name in b.objects:
+        return ('object-group ' if b.objects[name].kind == 'group' else 'object ') + name
     if re.match(r'^\d+\.\d+\.\d+\.\d+$', name):
         return 'host ' + name
     if re.match(r'^\d+\.\d+\.\d+\.\d+/\d+$', name):
@@ -402,6 +482,10 @@ def new_spec(ctx, name, rules, si, di, dst_names=None):
     return spec
 
 
+def spec_names(ctx, names):
+    return [ctx.bname(n)[0] if n in ctx.A.objects else n for n in names]
+
+
 def spec_objects(ctx, spec):
     out = []
     for n in spec['src'] + spec['dst']:
@@ -424,20 +508,30 @@ def net_resolve(cfg, name, seen=()):
 
 
 def net_objects(ctx, name, seen=()):
-    """an A network object / group to create on B, members first"""
+    """an A network object / group to create on B, members first; nothing for an object B already has (by name or
+    by value)"""
     o = ctx.A.objects.get(name)
-    if o is None or name in seen or name in ('any', 'any4') or net_resolve(ctx.A, name).is_any():
+    if o is None or name in seen or name in ('any', 'any4'):
+        return []
+    bn, on_b = ctx.bname(name)
+    if on_b:
+        return []
+    if o.kind == 'fqdn':
+        return [{'name': safe(bn), 'type': 'FQDN', 'value': o.value, 'cli': ['object network %s' % bn, ' fqdn %s' % o.value],
+                 '_addrs': None}]
+    if net_resolve(ctx.A, name).is_any():
         return []
     if o.kind != 'group':
-        return [obj_line(safe(name), o.addrs)] if o.addrs and not o.addrs.is_any() else []
+        return [dict(obj_line(safe(bn), o.addrs), _addrs=o.addrs)] if o.addrs and not o.addrs.is_any() else []
     out = []
     subs = [m[4:] for m in o.members if m.startswith('obj:')]
     lits = [m for m in o.members if not m.startswith('obj:')]
     for m in subs:
         out += net_objects(ctx, m, seen + (name,))
-    out.append({'name': safe(name), 'type': 'Group', 'value': 'group of %s' % ', '.join(subs + lits),
-                'cli': ['object-group network %s' % name] + [' network-object object %s' % m for m in subs] +
-                [' network-object %s' % cli_addr(ctx.A, l) for l in lits]})
+    bsubs = [ctx.bname(m)[0] for m in subs]
+    out.append({'name': safe(bn), 'type': 'Group', 'value': 'group of %s' % ', '.join(bsubs + lits),
+                'cli': ['object-group network %s' % bn] + [' network-object object %s' % m for m in bsubs] +
+                [' network-object %s' % cli_addr(ctx.A, l) for l in lits], '_addrs': net_resolve(ctx.A, name)})
     return out
 
 
@@ -471,9 +565,10 @@ def spec_cli(ctx, spec, limit=16):
     out = []
     for si in spec['si'][:2]:
         for di in spec['di'][:2]:
-            for s_ in spec['src']:
-                for d_ in spec['dst']:
-                    for line in acl_lines(spec['svc'], si, cli_addr(ctx.A, s_), di, cli_addr(ctx.A, d_), limit=limit):
+            for s_ in spec_names(ctx, spec['src']):
+                for d_ in spec_names(ctx, spec['dst']):
+                    for line in acl_lines(spec['svc'], si, cli_addr(ctx.A, s_, ctx.B), di, cli_addr(ctx.A, d_, ctx.B),
+                                          limit=limit):
                         if not line.startswith('!') and line not in out:
                             out.append(line)
     return out[:limit] + (['... %d more lines' % (len(out) - limit)] if len(out) > limit else [])
@@ -487,10 +582,13 @@ def spec_fmc(ctx, spec, pos=None, total=None):
     return ('Policies > Access Control > %s > Add Rule (%s%s): Name "%s", Action Allow, Zones: Source %s -> '
             'Destination %s, Networks: Source %s, Destination %s, Ports: %s, Logging: at end of connection.' % (
                 ctx.acp, where, order, spec['name'], ', '.join(spec['si']), ', '.join(spec['di']),
-                ', '.join(spec['src']), ', '.join(spec['dst']), ', '.join(spec['ports']) or 'any'))
+                ', '.join(spec_names(ctx, spec['src'])), ', '.join(spec_names(ctx, spec['dst'])),
+                ', '.join(spec['ports']) or 'any'))
 
 
 def _f(ctx, cat, key, scopes, what, why, evidence, fmc, cli, objects, verify, extra=None):
+    """one finding. group (when set) is its runbook section, from whether the fix could change traffic that works
+    today: before (safe now), during (in the takeover window), check (on the firewall first), later (review)"""
     st = (ctx.prof.finding_state or {}).get(key, {})
     d = {'id': 'F-' + key, 'key': key, 'category': cat, 'order': ORDER[cat], 'scopes': scopes,
          'scope': ', '.join(ctx.label(p) for p in scopes), 'what': what, 'why': why,
@@ -570,8 +668,9 @@ def routing_findings(ctx):
                 evid.append({'device': ctx.n['A'], 'line': e.get('lineno', 0), 'text': e.get('text') or '%s %s (%s)' % (
                     e['kind'], e['net'], e['ifc'])})
                 break
-        oname = safe('NET_%s' % p.replace('/', '_'))
-        ob = obj_line(oname, IPSet.parse(p))
+        oname, on_b = ctx.bname('', IPSet.parse(p))
+        ob = None if on_b else obj_line(safe('NET_%s' % p.replace('/', '_')), IPSet.parse(p))
+        oname = oname if on_b else ob['name']
         ip = sample(IPSet.parse(p))
         add = ('Devices > Device Management > %s > Routing > Static Route > Add Route: Interface %s, Available Network %s, '
                'Gateway %s, Metric 1.' % (bs, ifc, oname, nh))
@@ -588,9 +687,69 @@ def routing_findings(ctx):
                    'Management > %s > Interfaces > edit %s > IPv4.' % (ifc, bs, bs, ifc)]
             cli, ob, level = ['show route %s' % ip, 'show interface %s' % ifc], None, 'choice'
         verify = ['show route %s' % ip]
-        out.append(_f(ctx, 'routing', _key('routing', p), [p], what, why, evid, fmc, cli, [ob] if ob else [], verify,
+        group, undo = {'fix': 'before', 'check': 'check', 'choice': 'before'}[level], None
+        live = ctx.live_route(IPSet.parse(p), ifc) if level == 'fix' and ctx.up(ifc) else None
+        if live:
+            group = 'during'
+            fmc = ['During failover, not before: %s carries this %s today via %s (%s); adding the route now would move '
+                   'that traffic. Static routes cannot be added disabled, so this step is in the runbook. %s' % (
+                       bs, kind, live['ifc'], live['net'], add)]
+            undo = {'fmc': ['Devices > Device Management > %s > Routing > Static Route: delete the route for %s on %s, '
+                            'then Deploy.' % (bs, p, ifc)], 'cli': ['no ' + cli[0]]}
+        objs = [ob] if ob else []
+        ex = exemptions(ctx, p, ifc)
+        for e in ex:
+            fmc.append(e['fmc'])
+            cli += e['cli']
+            objs += [o for o in e['objects'] if o['name'] not in [x['name'] for x in objs]]
+        out.append(_f(ctx, 'routing', _key('routing', p), [p], what, why, evid, fmc, cli, objs, verify,
                       {'status': r['status'], 'plain_status': plain(r['status'], ctx.n), 'fmc_group': 'Routing',
-                       'level': level, 'short': short, 'subject': p}))
+                       'level': level, 'short': short, 'subject': p, 'group': group, 'undo': undo,
+                       'exemptions': [e['line'] for e in ex]}))
+    return out
+
+
+def map_nat_line(ctx, line):
+    """an A NAT line with B's interface names and B's object names: (line, objects to create)"""
+    m = re.match(r'^nat \(([^,]+),([^)]+)\)(.*)$', line)
+    if not m:
+        return line, []
+    objs, toks = [], []
+    for t in m.group(3).split():
+        if t in ctx.A.objects:
+            bn, on_b = ctx.bname(t)
+            if not on_b:
+                objs += net_objects(ctx, t)
+            t = bn
+        toks.append(t)
+    return 'nat (%s,%s) %s' % (ctx.prof.map_ifc(m.group(1)), ctx.prof.map_ifc(m.group(2)), ' '.join(toks)), objs
+
+
+def exemptions(ctx, p, ifc):
+    """A NAT exemptions (identity NAT) the route for p depends on: listed with the route, with B's state"""
+    from .compare import nat_kind, _same_dst
+    s = IPSet.parse(p)
+    out = []
+    for n in ctx.A.nats:
+        if n.inactive or not nat_kind(n).startswith('identity') or n.obj:
+            continue
+        if not (n.real.overlaps(s) or (n.dst_real is not None and n.dst_real.overlaps(s))):
+            continue
+        if ifc not in (ctx.prof.map_ifc(n.real_ifc), ctx.prof.map_ifc(n.mapped_ifc), 'any'):
+            continue
+        have = [m for m in ctx.B.nats if nat_kind(m) == nat_kind(n) and n.real.issubset(m.real) and _same_dst(n, m)
+                and not m.inactive]
+        line, objs = map_nat_line(ctx, n.line)
+        if have:
+            out.append({'line': n.line, 'fmc': 'This route depends on the NAT exemption %s has (line %d: %s); %s has '
+                        'it (line %d), no change.' % (ctx.n['A_short'], natorder.line_of(n), n.line, ctx.n['B_short'],
+                                                      natorder.line_of(have[0])), 'cli': [], 'objects': []})
+        else:
+            out.append({'line': n.line, 'fmc': 'This route depends on the NAT exemption %s has (line %d: %s). %s has no '
+                        'matching NAT: add it with the route: Devices > NAT > %s > Add Rule: NAT Rule Manual, Type '
+                        'Static, Insert In Category Before Auto NAT, the same original and translated objects.' % (
+                            ctx.n['A_short'], natorder.line_of(n), n.line, ctx.n['B_short'], ctx.natp),
+                        'cli': [line], 'objects': objs})
     return out
 
 
@@ -622,19 +781,26 @@ def pat_findings(ctx):
             cov = cov | part
         objects = []
         if not hit or cov == s:
-            oname = safe('NET_%s' % p.replace('/', '_'))
-            objects.append(obj_line(oname, s))
+            oname, on_b = ctx.bname('', s)
+            if not on_b:
+                oname = safe('NET_%s' % p.replace('/', '_'))
+                objects.append(obj_line(oname, s))
             srcs = [oname]
         else:
             srcs = []
             for part, n in hit:
                 if not natorder.shared(n):
                     continue
-                nm = safe(n.real_ref) if part == n.real and re.match(r'^[A-Za-z]', n.real_ref or '') else \
-                    safe('NET_%s' % repr(part).split(',')[0].replace('/', '_'))
+                if part == n.real and re.match(r'^[A-Za-z]', n.real_ref or '') and n.real_ref in ctx.A.objects:
+                    nm, on_b = ctx.bname(n.real_ref)
+                else:
+                    nm, on_b = ctx.bname('', part)
+                    nm = nm if on_b else safe('NET_%s' % repr(part).split(',')[0].replace('/', '_'))
+                nm = safe(nm)
                 if nm not in srcs:
                     srcs.append(nm)
-                    objects.append(obj_line(nm, part))
+                    if not on_b:
+                        objects.append(obj_line(nm, part))
         dedicated = sorted({h for n in dyn if not n.mapped_interface and n.mapped is not None for h in n.mapped.hosts()},
                            key=lambda x: int(ipaddress.IPv4Address(x)))
         shadow = natorder.shadowed(ctx.A)
@@ -673,8 +839,12 @@ def pat_findings(ctx):
                'Interface Objects: Source %s, Destination %s; Translation: Original Source %s, %s.' % (
                    ctx.natp, b_in, ctx.b_out, ', '.join(srcs), trans)]
         cli = ['nat (%s,%s) after-auto source dynamic %s %s' % (b_in, ctx.b_out, x, cli_t) for x in srcs]
-        h = sample(cov if hit and cov != s else s)
-        verify = ['packet-tracer input %s tcp %s 40000 8.8.8.8 443' % (b_in, h), 'show xlate local %s' % h]
+        h, an = pick_host(ctx, cov if hit and cov != s else s, a_src, b_in, ctx.b_out)
+        verify = ['packet-tracer input %s tcp %s 40000 8.8.8.8 443' % (b_in, h), 'show xlate local %s' % h,
+                  'Expected: %s is translated to %s by the new PAT rule%s.' % (
+                      h, ('the %s interface address' % ctx.b_out) if cli_t == 'interface' else cli_t,
+                      (' (on %s it matches %s, line %d)' % (ctx.n['A_short'], an.real_ref, natorder.line_of(an))) if an else '')]
+        verify += ctx.shut_note(b_in)
         out.append(_f(ctx, 'pat', key, [p], what, why, evid, fmc, cli, objects, verify,
                       {'status': b['status'], 'plain_status': 'no outbound PAT on %s' % ctx.n['B_short'], 'fmc_group': 'NAT',
                        'short': 'No outbound PAT on %s; hosts cannot reach the internet' % ctx.n['B_short'], 'subject': p,
@@ -683,25 +853,70 @@ def pat_findings(ctx):
     return out
 
 
-def inbound_findings(ctx):
-    from .compare import effective_rules, eval_slice
-    b_rules = effective_rules(ctx.B)
-    out = []
-    for i in ctx.res.get('inbound', []):
-        if i['status'] == 'ready' or i.get('row_state'):
+def pick_host(ctx, s, a_src, b_in, b_out):
+    """a test host of s that A translates with the dynamic PAT the finding is about and that no 1:1 NAT on B catches
+    first, so the test shows what the finding claims: (address, A's NAT rule for it)"""
+    for a, b in s.iv:
+        for x in range(a + (1 if b - a >= 2 else 0), min(b, a + 256) + 1):
+            h = IPSet([(x, x)])
+            ea, _ = natorder.best_effective(ctx.A, h, a_src, sorted(ctx.outs_a))
+            ra = [n for part, n in ea if n is not None]
+            if not ra or not natorder.shared(ra[0]):
+                continue
+            rb = [n for part, n in natorder.effective(ctx.B, h, b_in, b_out) if n is not None]
+            if rb and not natorder.shared(rb[0]):
+                continue
+            return str(ipaddress.IPv4Address(x)), ra[0]
+    return sample(s), None
+
+
+def zone_edit(ctx, x, si, di):
+    """B already has the rule, on other zones: edit it instead of adding one. Keep a zone that carries traffic today
+    (for example from the other site) and add the new one; replace a zone that carries nothing"""
+    from .detect import route_split_up
+    fmc, cli, keep_all = [], [], True
+    new = x.line
+    for side, cur, want, addrs in (('Source', x.src_ifc, si, x.src), ('Destination', x.dst_ifc, di, x.dst)):
+        if not cur or not want or cur == want or want == 'any':
             continue
+        live = any(i == cur for i, part in route_split_up(ctx.B, addrs)) if not addrs.is_any() else ctx.up(cur)
+        if live:
+            fmc.append('%s Zones: add %s and keep %s (it carries traffic today, for example from the other site).' % (
+                side, want, cur))
+        else:
+            keep_all = False
+            fmc.append('%s Zones: replace %s with %s (nothing reaches this rule on %s).' % (side, cur, want, cur))
+        new = re.sub(r'\bifc %s\b' % re.escape(cur), 'ifc %s' % want, new, count=1)
+    if not fmc:
+        return [], []
+    text = 'Policies > Access Control > %s > edit rule "%s" (it already exists on %s, do not add a new one): %s' % (
+        ctx.acp, x.rule_name or x.seq, ctx.n['B_short'], ' '.join(fmc))
+    cli = [new] if keep_all else ['no ' + x.line, new]
+    return [text], cli
+
+
+def inbound_findings(ctx):
+    from .compare import PERMIT, effective_rules, eval_slice, specific_twin
+    b_rules = effective_rules(ctx.B)
+    out, done = [], set()
+    bs = ctx.n['B_short']
+    for i in ctx.res.get('inbound', []):
+        if i['status'].startswith('ready') or i.get('row_state') or (i['real'], i['a_public']) in done:
+            continue                                    # the same server published twice (object and manual NAT)
+        done.add((i['real'], i['a_public']))
         n = i['_nat']
         host = host_name(i['object'], i.get('description', ''))
         real = i['real']
         ports = ports_text(i.get('_svc'))
         nat_st, rule_st = i.get('nat_status', ''), i.get('rule_status', '')
         nat_txt = {'missing': 'no NAT', 'inactive on B': 'the NAT but it is disabled',
-                   'mapped conflict': 'a NAT whose public IP conflicts with another host'}.get(nat_st, 'the NAT')
+                   'mapped conflict': 'a NAT whose public IP conflicts with another host',
+                   'wrong interface': 'the NAT on another interface'}.get(nat_st, 'the NAT')
         rule_txt = {'missing': 'no access rule', 'partial': 'an access rule for only part of the ports'}.get(rule_st, 'the access rule')
-        tail = ('%s has %s and %s.' % (ctx.n['B_short'], nat_txt, rule_txt) if rule_st != 'covered' else
-                '%s has %s; the access rule is in place.' % (ctx.n['B_short'], nat_txt))
+        tail = ('%s has %s and %s.' % (bs, nat_txt, rule_txt) if rule_st != 'covered' else
+                '%s has %s; the access rule is in place.' % (bs, nat_txt))
         if nat_st in ('match', 'mapped reuse', 'mapped outside B public'):
-            tail = '%s has the NAT but %s.' % (ctx.n['B_short'], rule_txt)
+            tail = '%s has the NAT but %s.' % (bs, rule_txt)
         what = '%s (%s) is published at %s on %s %s. %s' % (real, host, ctx.n['A_short'], i['a_public'] or '?', ports, tail)
         why = 'During %s %s internet outage this server is unreachable from the internet.' % (
             'an' if ctx.n['A_short'][:1].lower() in 'aeiou' else 'a', ctx.n['A_short'])
@@ -714,53 +929,129 @@ def inbound_findings(ctx):
         if i.get('_b_nat') is None:
             evid.append({'device': ctx.n['B'], 'line': 0, 'text': '(no static NAT for %s)' % real})
         b_pub = i['b_public']
-        real_obj = safe(n.real_ref if re.match(r'^[A-Za-z]', n.real_ref or '') else 'SRV_' + real.replace('/', '_'))
-        pub_obj = safe('PUB_%s_%s' % (host.split('.')[0], ctx.n['B_short'])) if b_pub else '<public IP object>'
-        objects = [obj_line(real_obj, n.real)]
-        if b_pub and nat_st == 'missing':
+        ri, mo = i.get('b_real_ifc') or '', i.get('b_mapped_ifc') or ctx.b_out
+        if re.match(r'^[A-Za-z]', n.real_ref or '') and n.real_ref in ctx.A.objects:
+            real_obj, real_on_b = ctx.bname(n.real_ref)
+        else:
+            real_obj, real_on_b = ctx.bname('', n.real)
+        real_obj = safe(real_obj or 'SRV_' + real.replace('/', '_'))
+        pub_obj, pub_on_b = (ctx.bname('', IPSet.parse(b_pub)) if b_pub else ('', False))
+        pub_obj = safe(pub_obj) if pub_on_b else safe('PUB_%s_%s' % (host.split('.')[0], bs)) if b_pub else '<public IP object>'
+        objects = [] if real_on_b else [obj_line(real_obj, n.real)]
+        if b_pub and nat_st == 'missing' and not pub_on_b:
             objects.append(obj_line(pub_obj, IPSet.parse(b_pub)))
-        pre, cli = [], []
+        divert = bool(ri) and ctx.up(ri) and ctx.routed_today(n.real, ri)
+        pre, cli, group, level, enable, undo = [], [], 'before', 'fix', None, None
         if nat_st == 'inactive on B':
             m = i['_b_nat']
             pre.append('Devices > NAT > %s > edit the rule for %s -> %s: tick Enable.' % (ctx.natp, m.real_ref, m.mapped_ref))
             cli.append('%s   (remove "inactive")' % (m.line or 'nat ... inactive'))
+            if divert:
+                group = 'during'
+                pre[0] = ('During failover, not before: %s is reachable through %s on %s today, and enabling the NAT '
+                          'changes its outbound address. ' % (real, ri, bs)) + pre[0]
+                undo = {'fmc': ['Devices > NAT > %s > edit the rule for %s -> %s: untick Enable, then Deploy.' % (
+                    ctx.natp, m.real_ref, m.mapped_ref)], 'cli': [m.line]}
+        elif nat_st == 'wrong interface':
+            m = i['_b_nat']
+            live = ctx.up(m.real_ifc) and ctx.routed_today(n.real, m.real_ifc)
+            pre.append('Devices > NAT > %s > edit the rule for %s -> %s (line %d; it already exists on %s, do not add a '
+                       'new one): Interface Objects: Source %s (it is %s now), Destination %s. Option: Source any, if '
+                       'the rule must work both before and after takeover.' % (
+                           ctx.natp, m.real_ref, m.mapped_ref, natorder.line_of(m), bs, ri, m.real_ifc, mo))
+            if m.obj:
+                cli += ['object network %s' % m.obj, ' nat (%s,%s) static %s' % (ri, mo, m.mapped_ref)]
+            else:
+                cli += ['no ' + m.line, re.sub(r'^nat \([^)]*\)', 'nat (%s,%s)' % (ri, mo), m.line)]
+            if live:
+                group = 'during'
+                pre[0] = ('During failover, not before (or set Source any now): the rule translates %s on %s today. ' % (
+                    real, m.real_ifc)) + pre[0]
+                undo = {'fmc': ['Devices > NAT > %s > edit the rule for %s -> %s: Source %s again, then Deploy.' % (
+                    ctx.natp, m.real_ref, m.mapped_ref, m.real_ifc)], 'cli': [m.line]}
+        elif nat_st == 'missing' and not ri:
+            level, group = 'check', 'check'
+            pre.append('Check first which %s interface holds %s: show route %s. Then add the static NAT on that '
+                       'interface only: Devices > NAT > %s > Add Rule: NAT Rule Manual, Type Static, Source Interface '
+                       '<that interface>, Destination %s, Original Source %s, Translated Source %s.' % (
+                           bs, real, sample(n.real), ctx.natp, mo, real_obj, pub_obj))
         elif nat_st == 'missing':
-            pre.append('Devices > NAT > %s > Add Rule: NAT Rule Manual, Type Static, Insert In Category Before Auto NAT; '
-                       'Interface Objects: Source %s, Destination %s; Translation: Original Source %s, Translated Source %s.'
-                       % (ctx.natp, ctx.b_in, ctx.b_out, real_obj, pub_obj if b_pub else '<choose a public IP: see Your choices>'))
-            cli.append('nat (%s,%s) source static %s %s' % (ctx.b_in, ctx.b_out, real_obj, pub_obj))
-        specs = []
+            line = 'nat (%s,%s) source static %s %s' % (ri, mo, real_obj, pub_obj)
+            add = ('Devices > NAT > %s > Add Rule: NAT Rule Manual, Type Static, Insert In Category Before Auto NAT; '
+                   'Interface Objects: Source %s, Destination %s; Translation: Original Source %s, Translated Source %s'
+                   % (ctx.natp, ri, mo, real_obj, pub_obj if b_pub else '<choose a public IP: see Your choices>'))
+            if divert:
+                pre.append(add + '; untick Enable: create it disabled. %s is reachable through %s on %s today and the '
+                           'NAT would change its outbound address; enable it during failover.' % (real, ri, bs))
+                cli.append(line + ' inactive')
+                enable = {'subject': real, 'reason': 'Enable the NAT rule for %s (%s)' % (real_obj, real),
+                          'what': 'The static NAT for %s (%s) was created disabled on %s.' % (real_obj, real, bs),
+                          'why': 'It changes how %s reaches the internet, so it is enabled only when %s takes over.' % (
+                              real, bs),
+                          'fmc': ['Devices > NAT > %s > edit the rule for %s: tick Enable > OK > Save, then Deploy.' % (
+                              ctx.natp, real_obj)], 'cli': [line], 'verify': ['show nat detail | include %s' % real_obj],
+                          'undo': {'fmc': ['Devices > NAT > %s > edit the rule for %s: untick Enable, then Deploy.' % (
+                              ctx.natp, real_obj)], 'cli': [line + ' inactive']}}
+            else:
+                pre.append(add + '.')
+                cli.append(line)
+        specs, edits = [], []
         if rule_st != 'covered':
             by = {}
             for r in i.get('_a_rules', []):
                 by.setdefault(r.rule_name or r.rule_id or '#%d' % r.seq, []).append(r)
-            di = ctx.prof.map_ifc(n.real_ifc) or ctx.b_in
+            di = ri or ctx.prof.map_ifc(n.real_ifc)
+            di = di if di in ctx.B.interfaces else ''
             for rname, rs in by.items():
                 src, svc = IPSet(), None
                 for r in rs:
                     src = src | r.src
                     svc = r.svc if svc is None else svc | r.svc
-                st, _, _ = eval_slice(b_rules, ctx.b_out, di, src, n.real, svc)
+                si = ctx.prof.map_ifc(rs[0].src_ifc) if rs[0].src_ifc else mo
+                st, _, _ = eval_slice(b_rules, si, di or None, src, n.real, svc)
                 if st == 'covered':
                     continue
-                specs.append(new_spec(ctx, rname, rs, [ctx.b_out], [di], [real_obj])['name'])
+                alt = eval_slice([x for x in b_rules if x.action not in PERMIT or specific_twin(src, n.real, x)],
+                                 False, False, src, n.real, svc)
+                if alt[0] == 'covered' and alt[1]:
+                    t, c = zone_edit(ctx, alt[1][0], si, di)
+                    if t:
+                        edits += t
+                        cli += [x for x in c if x not in cli]
+                        continue
+                if not di:
+                    edits.append('Check first which %s interface holds %s (show route %s), then add rule "%s" with that '
+                                 'interface as the destination zone.' % (bs, real, sample(n.real), rname))
+                    continue
+                specs.append(new_spec(ctx, rname, rs, [si], [di], [n.real_ref if n.real_ref in ctx.A.objects else real_obj])['name'])
+        if group == 'during' and (specs or edits):
+            enable = {'subject': real, 'reason': 'Change the NAT for %s (%s)' % (real_obj, real),
+                      'what': 'The NAT for %s (%s) on %s is changed only when %s takes over.' % (real_obj, real, bs, bs),
+                      'why': 'It translates traffic that passes %s today.' % bs, 'fmc': pre, 'cli': cli,
+                      'verify': ['show nat detail | include %s' % real_obj], 'undo': undo}
+            pre = ['Leave the NAT for %s as it is until failover: the runbook changes it during failover. Add the '
+                   'access rules now.' % real_obj]
+            cli, group, undo = [c for c in cli if not c.startswith(('nat ', 'no nat', 'object network', ' nat'))], 'before', None
         dns = b_pub != i['a_public']
-        post = []
+        post = list(edits)
         if dns:
             post.append('DNS: failover record for %s: %s -> %s (lower the TTL first).' % (
                 host, i['a_public'], b_pub or 'pending public IP (see Your choices)'))
-        verify = [tracer(ctx.b_out, i.get('_svc'), '8.8.8.8', b_pub or '<B public>'),
-                  'show xlate global %s' % (b_pub or '<B public>'), 'show nat detail | include %s' % real_obj]
+        verify = [tracer(mo, i.get('_svc'), '8.8.8.8', b_pub or '<B public>'),
+                  'show xlate global %s' % (b_pub or '<B public>'), 'show nat detail | include %s' % real_obj,
+                  'Expected: %s is untranslated to %s by the static NAT for %s, and the access rule allows it.' % (
+                      b_pub or '<B public>', real, real_obj)]
+        verify += ctx.shut_note(ri)
         dec = 'test' if TEST_NAME.search(host) or TEST_NAME.search(i['object'] or '') else ''
         out.append(_f(ctx, 'inbound', _key('inbound', i['object'], real), i['scopes'], what, why, evid, pre, cli, objects,
-                      verify, {'status': i['status'], 'plain_status': '%s has %s and %s' % (ctx.n['B_short'], nat_txt, rule_txt),
+                      verify, {'status': i['status'], 'plain_status': '%s has %s and %s' % (bs, nat_txt, rule_txt),
                                'fmc_group': 'NAT' if nat_st != 'match' else 'Access Control', 'host': host, 'real': real,
                                'a_public': i['a_public'], 'b_public': b_pub, 'ports': ports, 'dns_change': dns,
                                'suggest': 'not needed: test/dev server' if dec else '', 'nat_status': nat_st,
                                'rule_status': rule_st, 'acp_rules': specs, '_fmc_pre': pre, '_fmc_post': post,
-                               'short': 'Published server %s (%s): %s has %s and %s' % (real, host, ctx.n['B_short'], nat_txt, rule_txt),
-                               'subject': real,
-                               'folded_rules': specs}))
+                               'short': 'Published server %s (%s): %s has %s and %s' % (real, host, bs, nat_txt, rule_txt),
+                               'subject': real, 'level': level, 'group': group, 'enable': enable, 'undo': undo,
+                               'b_real_ifc': ri, 'folded_rules': specs}))
     return out
 
 
@@ -774,7 +1065,7 @@ def rule_findings(ctx):
     scope = ctx.prof.scope_set()
     groups = {}
     for r in ctx.res.get('rules', []):
-        if r['status'] == 'covered' or r.get('row_state'):
+        if r['status'] in ('covered', 'not compared (FQDN)') or r.get('row_state'):
             continue
         groups.setdefault(r['rule'] or r['rule_id'] or r['id'], []).append(r)
     folded = []
@@ -786,6 +1077,9 @@ def rule_findings(ctx):
             continue
         st = min((r['status'] for r in rows), key=lambda x: SEVERITY.get(x, 9))
         first = rules[0]
+        if all(r['status'] == 'compare in FMC' for r in rows):
+            out.append(l7_finding(ctx, name, rows, rules))
+            continue
         def few(vals):
             v = list(dict.fromkeys(x for x in vals if x))
             return ', '.join(v[:3]) + (' (+%d more)' % (len(v) - 3) if len(v) > 3 else '') if v else 'any'
@@ -795,10 +1089,17 @@ def rule_findings(ctx):
         verb = {'missing': 'has no matching permit', 'partial': 'allows only part of it',
                 'shadowed': 'blocks it with an earlier rule (%s)' % named(rows[0].get('detail', ''), ctx.n),
                 'denied': 'denies it'}.get(st, st)
+        fq = rows[0].get('fqdn')
+        if fq and st == 'missing':
+            verb = 'has no rule for %s (%s)' % (', '.join(n for v in fq.values() for n in v), named(rows[0]['detail'], ctx.n))
         what = '%s%s rule "%s" (%d line%s) allows %s -> %s (%s); %s %s.' % (
             subnets(ctx, scopes), ctx.dev(tag), name, len(rows), '' if len(rows) == 1 else 's', src_t, dst_t, svc_t,
             ctx.n['B_short'], verb)
         why = 'When %s takes over, this traffic is dropped%s.' % (ctx.n['B_short'], ' in part' if st == 'partial' else '')
+        pos = next((r['position'] for r in rows if r.get('position')), '')
+        if pos:
+            what += ' ' + named(pos, ctx.n)
+            why += ' The block sits in a different place among the allow rules on the two firewalls.'
         evid = []
         for x in rules[:4]:
             for t, no, line in (getattr(x, 'evidence', []) or [('', getattr(x, 'lineno', 0), x.line)])[:1]:
@@ -807,9 +1108,27 @@ def rule_findings(ctx):
             evid += [ev(ctx.n['B'], m) for m in r.get('_b', [])[:2]]
         si = list(dict.fromkeys(r['b_src_ifc'].split(', ')[0] for r in rows))
         di = list(dict.fromkeys(r['b_dst_ifc'].split(', ')[0] for r in rows))
+        if all(r.get('_b_other') for r in rows):
+            fmc, cli = [], []
+            for r in rows:
+                for x in r['_b_other'][:2]:
+                    t, c = zone_edit(ctx, x, r['b_src_ifc'].split(', ')[0], r['b_dst_ifc'].split(', ')[0])
+                    fmc += [y for y in t if y not in fmc]
+                    cli += [y for y in c if y not in cli]
+            if fmc:
+                what += ' %s has the same rule on other zones.' % ctx.n['B_short']
+                out.append(_f(ctx, 'rules', _key('rulename', name), scopes, what, why, evid, fmc, cli, [], [
+                    tracer(si[0] if si[0] != 'any' else ctx.b_out, first.svc,
+                           sample(first.src if not first.src.is_any() else None),
+                           sample(first.dst if not first.dst.is_any() else None))] + ctx.shut_note(si[0]),
+                    {'status': st, 'plain_status': plain(st, ctx.n), 'fmc_group': 'Access Control',
+                     'short': 'Rule "%s": %s has it on other zones; edit it' % (name, ctx.n['B_short']),
+                     'subject': ', '.join(scopes[:3]) or 'rule "%s"' % name, 'flags': [], 'rule': name,
+                     'lines': len(rows), 'group': 'before', 'edit': True}))
+                continue
         spec = new_spec(ctx, name, rules, si, di)
         verify = [tracer(si[0] if si[0] != 'any' else ctx.b_out, first.svc, sample(first.src if not first.src.is_any() else None),
-                         sample(first.dst if not first.dst.is_any() else None))]
+                         sample(first.dst if not first.dst.is_any() else None))] + ctx.shut_note(si[0])
         flags = []
         if any(r.get('action_check') == 'action unknown (L7)' for r in rows):
             flags.append('L7 rule: confirm in FMC that it is an Allow rule')
@@ -848,6 +1167,27 @@ def rule_findings(ctx):
                        'scopes_any': sorted({p for x in rows for p in x.get('scopes_any', [])}), 'flags': [], 'rule': name,
                        'lines': len(rows)}))
     return out
+
+
+def l7_finding(ctx, name, rows, rules):
+    """an L7 rule that shows as any to any in LINA: never copied, never a match; compare it in FMC"""
+    scopes = sorted({p for r in rows for p in r.get('scopes', [])})
+    scopes_any = sorted({p for r in rows for p in r.get('scopes_any', [])})
+    first = rules[0]
+    what = '%s rule "%s" is an L7 rule that shows as any to any in this config (%s -> %s, %s).' % (
+        ctx.dev(''), name, rows[0]['src_ifc'], rows[0]['dst_ifc'], rows[0]['service'])
+    why = ('Its URL, application or geo conditions are not visible here, so the tool cannot tell what it allows. '
+           'Warning: copying it without its conditions would allow all traffic.')
+    fmc = ['Compare in FMC: URL, application or geo conditions are not visible. Open rule "%s" in the %s and %s access '
+           'policies and compare Applications, URLs and Geolocation. Do not copy it from this config.' % (
+               name, ctx.n['A_short'], ctx.n['B_short'])]
+    evid = [{'device': ctx.dev(''), 'line': getattr(x, 'lineno', 0), 'text': x.line} for x in rules[:3]]
+    return _f(ctx, 'rules', _key('rulename', name), scopes, what, why, evid, fmc, [], [], [
+        'FMC: Policies > Access Control > rule "%s" on both: the same Applications, URLs and Geolocation' % name],
+        {'status': 'compare in FMC', 'plain_status': plain('compare in FMC', ctx.n), 'fmc_group': 'Access Control',
+         'level': 'check', 'group': 'check', 'short': 'L7 rule "%s": compare it in FMC (conditions not visible)' % name,
+         'subject': 'rule "%s"' % name, 'scopes_any': scopes_any, 'flags': ['L7 any to any: never copy without its '
+                                                                            'conditions'], 'rule': name, 'lines': len(rows)})
 
 
 def finalize(ctx, findings):
@@ -1210,18 +1550,35 @@ def build(res, prof, A, B, info):
     for f in fs:
         keep = []
         for o in f['fix']['objects']:
-            b = B.objects.get(o['name'])
+            addrs = o.pop('_addrs', None)
             if o['type'] == 'Port':
                 if o['name'] in B.services:
                     f.setdefault('objects_on_b', []).append(o['name'])
                     continue
                 keep.append(o)
                 continue
-            if b is not None and b.kind != 'group' and b.addrs.cidrs() and ', '.join(b.addrs.cidrs()[:8]) in (o['value'], o['value'] + '/32'):
-                f.setdefault('objects_on_b', []).append(o['name'])
+            if o['name'] in B.objects or (addrs is not None and repr(addrs) in ctx.bvals):
+                f.setdefault('objects_on_b', []).append(o['name'])         # never create or redefine a B object
                 continue
             keep.append(o)
         f['fix']['objects'] = keep
+        text = ' '.join(f['fix']['cli'] + f['fix']['fmc'])
+        for nm, note in ctx.obj_notes.items():
+            if re.search(r'(?<![\w.-])%s(?![\w.-])' % re.escape(nm), text) and note not in f['fix']['fmc']:
+                f['fix']['fmc'].append(note)
+    uniq, seen = [], {}
+    for f in fs:
+        k = (f['category'], f['what'])
+        if k in seen:
+            g = seen[k]
+            g['scopes'] = sorted(set(g['scopes']) | set(f['scopes']))
+            g['scope'] = ', '.join(ctx.label(p) for p in g['scopes'])
+            continue
+        if not (f['fix']['fmc'] or f['fix']['cli'] or f['fix']['objects']):
+            continue                                    # nothing to do: not a finding
+        seen[k] = f
+        uniq.append(f)
+    fs = uniq
     for f in fs:
         if f['scopes'] and all(ctx.owned(p) for p in f['scopes']):
             f['level'], f['b_own'] = 'review', True

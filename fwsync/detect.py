@@ -64,6 +64,24 @@ def route_split(cfg, ipset):
     return list(out.items())
 
 
+def route_split_up(cfg, ipset):
+    """route_split as the firewall routes today: routes out of shut-down interfaces are not installed"""
+    out, rest = {}, ipset
+    for r in route_table(cfg):
+        i = cfg.interfaces.get(r['ifc'])
+        if not rest:
+            break
+        if i is not None and i.shutdown:
+            continue
+        part = rest & r['set']
+        if part:
+            out[r['ifc']] = out.get(r['ifc'], IPSet()) | part
+            rest = rest - part
+    if rest:
+        out[''] = rest
+    return list(out.items())
+
+
 def routed_via(cfg, ipset, ifc):
     """the part of ipset that cfg routes out of ifc"""
     for i, s in route_split(cfg, ipset):
