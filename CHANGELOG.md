@@ -154,12 +154,35 @@ Timing and safety:
   any-to-any permit, Block* allow, placeholder public object or live `no nat`). Three test_054b backhaul cases now
   expect the FMC edit instead of `no nat` plus a new line.
 
+### Takeover compare, second round on the real pair
+
+- VPN NAT with destination translation is copied as A's rule: same section and options, source identity with B's
+  active pool (the pool a tunnel group hands out), and A's destination real and mapped objects. A's pool object is
+  never used on B.
+- A PAT with source interface any stays any on B, with B's active pool as one object (no split by B's rules, no
+  connected interface chosen). A PAT out of another interface than B's main path (its default route with the lowest
+  distance) is Confirm use. A's VPN pool traffic is taken to enter on A's VPN interface.
+- A's NAT options are copied (dns, destination static, unidirectional, no-proxy-arp, route-lookup), and none are
+  added: exemptions no longer get no-proxy-arp and route-lookup when A's line has neither.
+- A B static with real and mapped interface any is no longer B's own choice when B exempts the same traffic toward
+  its other shared interfaces: the Missing NAT exemption is reported for the interface that lacks it, with B's source
+  group.
+- An L7 Block* rule on A's site interface is equal to B's block on the mapped interface when B's rule is named the same
+  way with the site mapping and has the same LINA line on the mapped zones (also any to any); it is not listed under
+  Compare in FMC.
+- Block position text is true: a B rule is said to carry an A allow only when that A allow is above the block in A's
+  order and takes some of its traffic, and the allow is named with its line. The block goes above the first B allow
+  that lets any of its traffic through (and so above the broad allow after it).
+- Route rows carry route commands only; the NAT a route depends on is judged by the NAT walk.
+- The NAT reference result no longer depends on set order when two results tie.
+- Docs: shared interfaces and the unreachable-address assumption are described in the README and known gaps.
+
 ### Takeover compare on a real pair (A primary, B takes over)
 
 Root causes found by comparing one real pair end to end; every fix is general logic with a synthetic test
 (tests/test_054d.py).
 
-- Shared interfaces are found by address: the same IP and subnet on both firewalls, with B's copy shut until
+- Shared interfaces are chosen by identical IP address and subnet on both firewalls where B's copy is shut until
   takeover. Only those are shut in the "internet down, firewalls up" steps (and brought up on B). The same addresses
   up on both firewalls are two separate site networks.
 - "Not hit on A": when A learns routes (OSPF, BGP) a line is no longer cleared by A's static routes; only A's
@@ -181,8 +204,9 @@ Root causes found by comparing one real pair end to end; every fix is general lo
 - L7 Block* rules match only a B block on the same mapped zones that holds their addresses and ports; one that is any
   to any in LINA is "Compare in FMC" unless B has the same rule with the same lines.
 - Blocks are placed above B's first rule that would allow their traffic, below the narrower B rules carrying allows A
-  has above the block. The report never says to add an A allow first. A B block that lacks only private or shared
-  address space B can reach only through its outside default route (and no crypto map) is equal.
+  has above the block. The report never says to add an A allow first. Assumption: a B block that lacks only private or
+  shared address space B's config sends only out of its outside default route (and no crypto map) is equal; B can
+  learn routes dynamically that the config does not show (listed in the known gaps).
 - New NAT brings the A exemptions above it (second pass, also for internal and reused static NATs). A NAT or
   exemption whose real interface is shut on B, or that could answer ARP, is "Now disabled".
 - One row per A line and interface pair: an exemption that splits into CIDRs and B lines is one row, above the

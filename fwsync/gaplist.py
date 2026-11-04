@@ -261,6 +261,18 @@ class Gaps:
                     return m
         return None
 
+    def sibling_exempt(self, ifc, out, x):
+        """a B identity NAT from ifc to another of B's shared interfaces (B's copy shut until takeover) whose source
+        group holds x: B exempts this traffic for the sibling interfaces, so the one toward out is missing"""
+        shared = {b for a, b in self.shared_ifcs()}
+        if out not in shared:
+            return None
+        for m in self.b_seq:
+            if not m.inactive and identity(m) and m.real_ifc == ifc and m.mapped_ifc in shared and m.mapped_ifc != out \
+                    and m.real is not None and x.issubset(m.real) and m.real_ref:
+                return m
+        return None
+
     def b_own(self, m):
         """B rule m is B's own NAT for one host: a static on every interface, or for a host A has no NAT for"""
         if m is None or m.kind != 'static' or identity(m) or natorder.shared(m) or m.real is None or m.real.is_any():
@@ -352,7 +364,8 @@ class Gaps:
         real = n.real if not n.real.is_any() or not _any_ifc(n.real_ifc) else self.a_subnets(n.real_ifc)
         out = self.b_ifc(n.mapped_ifc)
         mapped_home = self.b_ifc(n.real_ifc)
-        if kind == 'hairpin' or real.is_any():        # source any: the traffic entering that real interface
+        if kind == 'hairpin' or real.is_any() or (kind == 'vpn' and _any_ifc(n.real_ifc)):
+            # source any (or a VPN pool on any interface): the traffic entering that real interface, kept as it is
             parts = [(mapped_home, real)]
         else:
             parts = homes(self.B, real, mapped_home if not _any_ifc(n.real_ifc) else None, self.b_in, self.outs_b) \
@@ -379,7 +392,10 @@ class Gaps:
             if not part:
                 continue
             bad, first = IPSet(), None
-            for x, m in [y for d in dsts for y in walk(self.b_seq, part, ifc, out, d, n.service)]:
+            w_ifc = ifc
+            if kind == 'vpn' and _any_ifc(ifc):    # the pool's traffic enters B on its VPN interface
+                w_ifc = (list(getattr(self.B, 'ra_ifcs', []) or []) or [self.b_out])[0]
+            for x, m in [y for d in dsts for y in walk(self.b_seq, part, w_ifc, out, d, n.service)]:
                 b_lines.append(ref(m) if m is not None else '(no NAT on %s for %s from %s)' % (self.b, _cidrs(x), ifc))
                 if kind != 'exempt' and (m is None or identity(m) or (dst_xlate(n) and m.dst_mapped != n.dst_mapped)):
                     bad, first = bad | x, first or m
@@ -394,7 +410,7 @@ class Gaps:
                 if g:
                     gaps.append(g)
         bad = [r for r in results if not r.startswith('OK')]
-        result = bad[0] if bad else max(set(results), key=results.count) if results else 'OK'
+        result = bad[0] if bad else max(results, key=results.count) if results else 'OK'
         self._ref_row(n, kind, result, b_lines, gaps)
 
     def default_ifcs(self):
@@ -416,7 +432,9 @@ class Gaps:
         from .detect import route_split
         mine, other = IPSet(), None
         split = route_split(self.A, part)
-        if self.A.dynamic_routing:            # A learns routes we cannot see: only its connected subnets are certain
+        if _any_ifc(n.real_ifc) and self.a_kind(n) == 'vpn':
+            split = [(self.a_vpn_ifc(), part)]          # VPN clients arrive on A's VPN interface
+        elif self.A.dynamic_routing:            # A learns routes we cannot see: only its connected subnets are certain
             split = self._connected_split(split, n)
         if not _any_ifc(n.real_ifc):          # addresses A routes elsewhere never enter this rule's interface on A
             here = IPSet()
@@ -433,6 +451,12 @@ class Gaps:
                 elif other is None:
                     other = m
         return mine, other
+
+    def a_vpn_ifc(self):
+        """the interface A's remote-access VPN listens on (webvpn / ikev2 client-services), else its outside"""
+        m = re.findall(r'^ enable (\S+)', '\n'.join(re.findall(r'^webvpn\n((?: .*\n)+)', self.a_text, re.M)), re.M) + \
+            re.findall(r'^crypto ikev2 enable (\S+) client-services', self.a_text, re.M)
+        return m[0] if m else (self.outs_a[0] if self.outs_a else None)
 
     def _connected_split(self, split, n):
         """route_split for a config with dynamic routing: an address is placed on another interface only when it is
@@ -457,11 +481,18 @@ class Gaps:
         if kind == 'exempt':
             if m is None or identity(m):
                 return ('OK, no translation on %s' % self.b if m is None else 'OK, same exemption'), ''
+            sib = self.sibling_exempt(ifc, out, x) if _any_ifc(m.real_ifc) and _any_ifc(m.mapped_ifc) else None
+            if sib is not None:           # B exempts this traffic toward its other shared interfaces: one is missing
+                r = self.missing_exempt(n, ifc, out, x, m)
+                e = self.exempts[(id(n), ifc, out)]
+                e['src_obj'], e['src_set'] = sib.real_ref, sib.real
+                return r
             if self.b_own(m):
                 return 'OK, site device: %s\'s own static NAT for this host (line %d)' % (self.b, lno(m)), ''
             return self.missing_exempt(n, ifc, out, x, m)
         if m is not None and not identity(m) and (not dst_xlate(n) or m.dst_mapped == n.dst_mapped):
-            if self.site_twin(n, m) or (getattr(n, 'raw_real', None) is not None and n.raw_real != n.real):
+            if self.site_twin(n, m) or (kind != 'vpn' and getattr(n, 'raw_real', None) is not None and
+                                        n.raw_real != n.real):
                 return 'OK, site device', ''
             if kind == 'static' and natorder.shared(m) and not natorder.shared(n):
                 inb = self.b_static(x, ifc, out)
@@ -649,6 +680,37 @@ class Gaps:
         c = s.cidrs()[0]
         return str(ipaddress.IPv4Network(c, strict=False).supernet(new_prefix=24)) if int(c.split('/')[1]) > 24 else c
 
+    def dst_clause(self, n):
+        """A's destination part as B objects: (cli, FMC text, objects); empty when A has none"""
+        mm = re.search(r'\bdestination static (\S+) (\S+)', n.line)
+        if not mm or n.dst_real is None:
+            return '', '', []
+        d1, o1 = self.obj(n.dst_real, mm.group(1))
+        d2, o2 = self.obj(n.dst_mapped if n.dst_mapped is not None else n.dst_real, mm.group(2))
+        return (' destination static %s %s' % (d1, d2), '; Original Destination %s, Translated Destination %s' % (d1, d2),
+                o1 + o2)
+
+    def b_pool(self):
+        """(object name, addresses, objects) of B's active VPN pool: the pool a tunnel group hands out, else B's first"""
+        used = re.findall(r'^ address-pool (\S+)', self.b_text, re.M)
+        pools = re.findall(r'^ip local pool (\S+) (\S+)-(\S+) mask (\S+)', self.b_text, re.M)
+        pick = [p for p in pools if p[0] in used] or pools
+        if not pick:
+            return None
+        nm, lo, hi, mask = pick[0]
+        try:
+            net = IPSet.net(str(ipaddress.IPv4Network('%s/%s' % (lo, mask), strict=False)))
+        except ValueError:
+            return None
+        name, objs = self.obj(net, '')
+        return name, net, objs
+
+    def main_out(self):
+        """B's main path: the outside interface of its default route with the lowest distance"""
+        d = [(r.distance, r.ifc) for r in self.B.routes if r.network == '0.0.0.0' and r.mask == '0.0.0.0'
+             and r.ifc in self.outs_b]
+        return min(d)[1] if d else self.b_out
+
     def missing_static(self, n, ifc, out, x, m):
         a_line, addr = ref(n, self.a), _cidrs(x)
         name, objs = self.obj(x, n.real_ref)
@@ -661,11 +723,9 @@ class Gaps:
                       'show nat detail | include %s' % off.real_ref], 'nat')
             return 'Missing static NAT', 'Missing static NAT'
         reuse, blk, lines = self.public_choice(n)
-        dst = ''
-        if dst_xlate(n):
-            dn, dobjs = self.obj(n.dst_real, '')
-            dm, dmobjs = self.obj(n.dst_mapped, '')
-            objs, dst = objs + dobjs + dmobjs, ' destination static %s %s' % (dm, dn)
+        dst, dfmc, dobjs = self.dst_clause(n)
+        objs = objs + dobjs
+        opts = _opts(n)
         what = 'Missing static NAT'
         why = ('B today: %s' % ref(m, self.b)) if m is not None else '%s has no NAT for it' % self.b
         if reuse or not is_public(n.mapped or IPSet()):
@@ -674,7 +734,8 @@ class Gaps:
             if n.mapped is not None and pub not in self.B.objects and not pub[0].isdigit():
                 pub, pobjs = self.obj(n.mapped, n.mapped_ref)
             when = 'Now disabled' if reuse else 'Now'
-            cli = 'nat (%s,%s) source static %s %s%s%s' % (ifc, out, name, pub, dst, ' inactive' if reuse else '')
+            cli = 'nat (%s,%s) %ssource static %s %s%s%s%s' % (ifc, out, _sec(n), name, pub, dst, _opt_cli(opts),
+                                                               ' inactive' if reuse else '')
             req = ('Add a static NAT for %s to %s\'s public IP %s%s. %s already has %d NAT line%s in %s, so the block '
                    'moves with it; add it disabled and enable it at outage (it would answer ARP for an address %s '
                    'uses today).' % (addr, self.a, _cidrs(n.mapped), ' (destination translation kept)' if dst else '',
@@ -682,10 +743,10 @@ class Gaps:
                 'Add a static NAT for %s to %s%s.' % (addr, _cidrs(n.mapped) if n.mapped else n.mapped_ref,
                                                       ' (destination translation kept)' if dst else '')
             self.row(what, when, addr, name, a_line, why, req,
-                     ['Devices > NAT > %s > Add Rule: Manual, Static, Before Auto NAT; Source %s -> Destination %s; '
-                      'Original Source %s; Translated Source %s%s%s.' % (self.ctx.natp, ifc, out, name, pub,
-                                                                          dst and '; Destination translation as on %s' %
-                                                                          self.a, '; untick Enable' if reuse else '')]
+                     ['Devices > NAT > %s > Add Rule: Manual, Static, %s; Source %s -> Destination %s; '
+                      'Original Source %s; Translated Source %s%s%s%s.' % (self.ctx.natp, _sec_fmc(n), ifc, out, name,
+                                                                            pub, dfmc, _opt_fmc(opts),
+                                                                            '; untick Enable' if reuse else '')]
                      + [c for o in objs + pobjs for c in o['cli']] + [cli], 'nat', objs + pobjs)
             self._add('manual-before', 'static', ifc, out, x, pub, n.mapped, name, pat=False)
             return what, what
@@ -698,16 +759,42 @@ class Gaps:
         return what, what
 
     def missing_vpn(self, n, ifc, out, x, m):
-        a_line, addr = ref(n, self.a), _cidrs(x)
-        name, objs = self.obj(x, n.real_ref)
-        mapped = self.sibling_pat(ifc, out) if n.kind == 'dynamic' else n.mapped_ref
-        cli = 'nat (%s,%s) after-auto source %s %s %s inactive' % (ifc, out, n.kind, name, mapped)
-        self.row('Missing VPN NAT', 'Now disabled', addr, name, a_line, ref(m, self.b) if m else '(none)',
-                 'Add the NAT for the VPN pool %s from %s to %s disabled; enable it at outage (%s\'s VPN users use '
-                 'this pool today).' % (addr, ifc, out, self.b),
-                 ['Devices > NAT > %s > Add Rule: Manual, %s, After Auto NAT; Source %s -> Destination %s; Original '
-                  'Source %s; Translated Source %s; untick Enable.' % (self.ctx.natp, n.kind.title(), ifc, out, name, mapped)]
-                 + [c for o in objs for c in o['cli']] + [cli, 'show nat detail | include %s' % name], 'nat', objs)
+        """A's NAT for its VPN pool, copied as A's rule: same section and options, B's active pool as one object (never
+        A's pool object), A's destination part. A PAT out of another interface than B's main path: confirm its use"""
+        a_line = ref(n, self.a)
+        pool = self.b_pool()
+        if pool is not None:
+            name, px, objs = pool
+        else:
+            (name, objs), px = self.obj(x, n.real_ref), x
+        addr = _cidrs(px)
+        dst, dfmc, dobjs = self.dst_clause(n)
+        opts = _opts(n)
+        if n.kind == 'dynamic':
+            mapped = self.sibling_pat(ifc, out)
+            mobjs = []
+        elif n.mapped is not None and n.mapped == n.real:
+            mapped, mobjs = name, []
+        else:
+            mapped, mobjs = self.obj(n.mapped, n.mapped_ref) if n.mapped is not None else (n.mapped_ref, [])
+        main = self.main_out()
+        confirm = n.kind == 'dynamic' and out in self.outs_b and out != main
+        cli = 'nat (%s,%s) %ssource %s %s %s%s%s inactive' % (
+            ifc, out, _sec(n) or ('after-auto ' if n.section == 'auto' else ''), n.kind, name, mapped, dst, _opt_cli(opts))
+        req = 'Add %s\'s NAT for the VPN pool on %s: %s (%s\'s pool) from %s to %s%s, disabled; enable it at outage ' \
+              '(%s\'s VPN users use this pool today).' % (self.a, self.b, name, self.b, ifc, out,
+                                                       ' with the same destination translation' if dst else '', self.b)
+        if confirm:
+            req = '%s also translates its VPN pool out of %s, but %s\'s main path is %s (its default route). Confirm ' \
+                  'that VPN users need this on %s before adding it. Then: %s' % (self.a, out, self.b, main, out, req)
+        self.row('Missing VPN NAT', 'Confirm use' if confirm else 'Now disabled', addr, name, a_line,
+                 ref(m, self.b) if m else '(none)', req,
+                 ['Devices > NAT > %s > Add Rule: Manual, %s, %s; Source %s -> Destination %s; Original Source %s; '
+                  'Translated Source %s%s%s; untick Enable.' % (
+                      self.ctx.natp, n.kind.title(), _sec_fmc(n) if n.section != 'auto' else 'After Auto NAT', ifc, out,
+                      name, 'Destination Interface IP' if mapped == 'interface' else mapped, dfmc, _opt_fmc(opts))]
+                 + [c for o in objs + mobjs + dobjs for c in o['cli']] + [cli, 'show nat detail | include %s' % name],
+                 'nat', objs + mobjs + dobjs)
         return 'Missing VPN NAT', 'Missing VPN NAT'
 
     def missing_internal(self, n, ifc, out, x, m):
@@ -718,9 +805,13 @@ class Gaps:
             e['kind'] == 'connected' and e['ifc'] == out and n.mapped.overlaps(e['set']) for e in route_table(self.B)) \
             and self.up(out)
         down = not self.up(ifc)          # the host is reached another way today: the NAT would divert its traffic
-        sec = 'after-auto ' if n.section == 'manual-after' else ''
+        sec = _sec(n)
         off = arp or down
-        cli = 'nat (%s,%s) %ssource %s %s %s%s' % (ifc, out, sec, n.kind, name, pub, ' inactive' if off else '')
+        dst, dfmc, dobjs = self.dst_clause(n)
+        pobjs = pobjs + dobjs
+        opts = _opts(n)
+        cli = 'nat (%s,%s) %ssource %s %s %s%s%s%s' % (ifc, out, sec, n.kind, name, pub, dst, _opt_cli(opts),
+                                                     ' inactive' if off else '')
         self.row('Missing internal NAT', 'Now disabled' if off else 'Now', addr, name, a_line,
                  ref(m, self.b) if m else '(none)',
                  'Add the internal NAT %s -> %s between %s and %s%s.' % (
@@ -729,9 +820,9 @@ class Gaps:
                      'today)' % (self.b, out) if arp else
                      ' disabled; enable it at outage (%s is shut on %s today, so the NAT would send this traffic '
                      'there)' % (ifc, self.b) if down else ''),
-                 ['Devices > NAT > %s > Add Rule: Manual, %s; Source %s -> Destination %s; Original Source %s; '
-                  'Translated Source %s%s.' % (self.ctx.natp, n.kind.title(), ifc, out, name, pub,
-                                               '; untick Enable' if off else '')]
+                 ['Devices > NAT > %s > Add Rule: Manual, %s, %s; Source %s -> Destination %s; Original Source %s; '
+                  'Translated Source %s%s%s%s.' % (self.ctx.natp, n.kind.title(), _sec_fmc(n), ifc, out, name, pub, dfmc,
+                                                   _opt_fmc(opts), '; untick Enable' if off else '')]
                  + [c for o in objs + pobjs for c in o['cli']] + [cli], 'nat', objs + pobjs)
         self._add(n.section if n.section != 'auto' else 'manual-before', n.kind, ifc, out, x, pub, n.mapped, name,
                   pat=n.kind == 'dynamic', dst=n.dst_real if n.dst_real is not None and not n.dst_real.is_any() else None)
@@ -791,9 +882,16 @@ class Gaps:
             live = (any(i == ifc for i, p in route_split_up(self.B, x)) and self.up(ifc)) or not self.up(ifc) or \
                 any(m.line == '(proposed)' or getattr(m, 'inactive', False) for m in ms) or bool(e['because'])
             above = self._above(ms)
-            dst = ' destination static %s %s' % (dn, dn) if n.dst_real is not None else ''
-            cli = 'nat (%s,%s) source static %s %s%s no-proxy-arp route-lookup%s' % (
-                ifc, out, name, name, dst, ' inactive' if live else '')
+            if e.get('src_obj'):
+                name, objs = e['src_obj'], []
+                x = e['src_set']
+                addr = _cidrs(x)
+            dst, dfmc, dobjs2 = self.dst_clause(n)
+            if dst:
+                dobjs = dobjs2
+            opts = _opts(n)
+            cli = 'nat (%s,%s) %ssource static %s %s%s%s%s' % (
+                ifc, out, _sec(n), name, name, dst, _opt_cli(opts), ' inactive' if live else '')
             when = 'If route needed' if not routed else 'Now disabled' if live else 'Now'
             req = 'Add a NAT exemption for %s -> %s from %s to %s above %s%s.' % (
                 addr, _cidrs(n.dst_real) if n.dst_real is not None else 'any', ifc, out, above,
@@ -809,11 +907,10 @@ class Gaps:
             self.row('Missing NAT exemption', when, addr, name, a_line,
                      '%s translates it: %s' % (self.b, '; '.join(ref(m, self.b) if m.line != '(proposed)' else
                                                                  'the proposed rule' for m in ms[:4])), req,
-                     ['Devices > NAT > %s > Add Rule: Manual, Static, Before Auto NAT, above %s; Source %s -> '
-                      'Destination %s; Original Source %s, Translated Source %s%s; tick Do not proxy ARP and Perform '
-                      'route lookup%s.' % (self.ctx.natp, above, ifc, out, name, name,
-                                           '; Original and Translated Destination %s' % dn if dst else '',
-                                           '; untick Enable' if live else '')]
+                     ['Devices > NAT > %s > Add Rule: Manual, Static, %s, above %s; Source %s -> Destination %s; '
+                      'Original Source %s, Translated Source %s%s%s%s.' % (self.ctx.natp, _sec_fmc(n), above, ifc, out,
+                                                                          name, name, dfmc, _opt_fmc(opts),
+                                                                          '; untick Enable' if live else '')]
                      + [c for o in objs + dobjs for c in o['cli']] + [cli], 'nat', objs + dobjs,
                      note='second pass' if e['because'] else '')
 
@@ -1130,6 +1227,11 @@ class Gaps:
             same = [b for b in self.B.rules if not b.inactive and (b.rule_name or '') == name]
             if same and all(any(_ace(b.line) == _ace(self._mapped_line(y)) for b in same) for y in rules):
                 return                    # the same rule with the same LINA lines on the mapped zones
+            site = [b for b in self.B.rules if not b.inactive and b.rule_name and self.site_name(name) == _norm(b.rule_name)
+                    and (b.action in ('unknown', 'l7block') or block_name(b.rule_name, self.prof.l7_suspect))]
+            if site and all(any(self.zones_ok(b, y) and _ace(b.line) == _ace(self._mapped_line(y)) for b in site)
+                            for y in rules):
+                return                    # B's block for the mapped site interface, named the same way
             self.row('L7 rule' if same else 'Missing block', 'Compare in FMC', addr, name, self._lines_ref(rules),
                      ref(same[0], self.b) if same else '(none)',
                      'Compare block "%s" in FMC: its LINA line is any to any, so its conditions (applications, URLs, '
@@ -1150,6 +1252,14 @@ class Gaps:
                   '%s, Ports %s; copy its Applications, URLs and other conditions from %s\'s rule in FMC.' % (
                       self.ctx.acp, pos, name, self.b_ifc(x.src_ifc), self.b_ifc(x.dst_ifc), x.src_ref, x.dst_ref,
                       x.svc_ref, self.a)] + [c for o in objs for c in o['cli']], 'rule', objs)
+
+    def site_name(self, name):
+        """a rule name with A's site interface names replaced by the B interfaces they map to (normalised)"""
+        out = _norm(name)
+        for a, b in self.imap.items():
+            if b and b != 'ignore' and a != b:
+                out = re.sub(r'(^|_)%s(_|$)' % re.escape(_norm(a)), lambda m: m.group(1) + _norm(b) + m.group(2), out)
+        return out
 
     def _mapped_line(self, x):
         return re.sub(r'\bifc (\S+)', lambda mm: 'ifc %s' % self.b_ifc(mm.group(1)), x.line)
@@ -1225,16 +1335,32 @@ class Gaps:
         def hits(b, full):
             return any(self.zones_ok(b, x) and (_cover(b, x) if full else (
                 b.src.overlaps(x.src) and b.dst.overlaps(x.dst) and b.svc.overlaps(x.svc))) for x in rules)
-        carriers = [m for r in self.res.get('rules', []) if r['_rule'].seq < first_a for m in r.get('_b', [])
-                    if m in allows and hits(m, False) and not hits(m, True)]
-        last = max(carriers, key=lambda m: m.seq) if carriers else None
-        below = ('below rule "%s" (line %d), which carries an allow %s has above this block, and ' % (
-            last.rule_name or last.rule_id, lno(last), self.a)) if last is not None else ''
-        for full in (True, False):
-            for b in allows:
-                if (last is None or b.seq > last.seq) and hits(b, full):
-                    return '%sabove rule "%s" (line %d), the first %s rule that would allow %s traffic' % (
-                        below, b.rule_name or b.rule_id, lno(b), self.b, 'this' if full else 'part of this')
+        def same_zones(a, x):
+            return all(_any_ifc(getattr(a, k)) or _any_ifc(getattr(x, k)) or getattr(a, k) == getattr(x, k)
+                       for k in ('src_ifc', 'dst_ifc'))
+
+        def above(a):                     # an A allow before the block in A's order that takes some of its traffic
+            return a.action in PERMIT and a.acl == rules[0].acl and a.seq < first_a and any(
+                same_zones(a, x) and a.src.overlaps(x.src) and a.dst.overlaps(x.dst) and a.svc.overlaps(x.svc)
+                for x in rules)
+        carriers = [(m, r['_rule']) for r in self.res.get('rules', []) if above(r['_rule']) for m in r.get('_b', [])
+                    if m in allows and hits(m, False) and not hits(m, True) and m.src.overlaps(r['_rule'].src)
+                    and m.dst.overlaps(r['_rule'].dst) and m.svc.overlaps(r['_rule'].svc)]
+        last, a_allow = max(carriers, key=lambda c: c[0].seq) if carriers else (None, None)
+        below = ('below rule "%s" (line %d), which carries %s\'s allow "%s" (line %d, above this block on %s), and ' % (
+            last.rule_name or last.rule_id, lno(last), self.a, a_allow.rule_name or a_allow.rule_id, lno(a_allow),
+            self.a)) if last is not None else ''
+        after = [b for b in allows if last is None or b.seq > last.seq]
+        first = next((b for b in after if hits(b, False)), None)
+        if first is not None:
+            txt = '%sabove rule "%s" (line %d), the first %s rule that would allow %s traffic' % (
+                below, first.rule_name or first.rule_id, lno(first), self.b, 'this' if hits(first, True) else 'part of this')
+            if not hits(first, True):
+                full = next((b for b in after if b.seq > first.seq and hits(b, True)), None)
+                if full is not None:
+                    txt += ', and so also above rule "%s" (line %d), which allows all of it' % (
+                        full.rule_name or full.rule_id, lno(full))
+            return txt
         if last is not None:
             return below[:-len(', and ')]
         name, sect = self.ctx.anchor
@@ -1355,7 +1481,9 @@ class Gaps:
                      '%s %s: %s' % (self.a, ev[0]['line'], ev[0]['text']) if ev else '', f.get('plain_status', ''),
                      f['what'] + (' Choose the next hop on %s.' % self.b if when == 'Decision' else
                                   ' Add it unless %s learns this route.' % self.b),
-                     [x for x in f['fix']['fmc'] if '<next hop' not in x] + cli, 'route')
+                     [x for x in f['fix']['fmc'] if '<next hop' not in x and 'NAT exemption' not in x] +
+                     [c for c in cli if not c.lstrip().startswith(('nat ', 'no nat '))], 'route')
+            # the NAT a route depends on is judged by the NAT walk (its own rows), not copied here
 
     def _a_nexthop(self, ifc, net, mask):
         try:
@@ -1465,6 +1593,38 @@ def _flow(rules):
             v = v | getattr(x, k)
         return _cidrs(v) if v else 'none'
     return '%s -> %s' % (side('src'), side('dst'))
+
+
+OPTS = ('dns', 'unidirectional', 'no-proxy-arp', 'route-lookup')
+OPT_FMC = {'dns': 'tick Translate DNS replies', 'unidirectional': 'tick Unidirectional',
+           'no-proxy-arp': 'tick Do not proxy ARP on Destination Interface',
+           'route-lookup': 'tick Perform Route Lookup for Destination Interface'}
+
+
+def _opts(n):
+    """the NAT options A's line has (copied as they are, none added)"""
+    t = (n.line or '').split(' description ')[0].split()
+    return [o for o in OPTS if o in t]
+
+
+def _opt_cli(opts):
+    return ''.join(' ' + o for o in opts)
+
+
+def _opt_fmc(opts):
+    return ''.join('; ' + OPT_FMC[o] for o in opts)
+
+
+def _sec(n):
+    return 'after-auto ' if n.section == 'manual-after' else ''
+
+
+def _sec_fmc(n):
+    return 'After Auto NAT' if n.section == 'manual-after' else 'Before Auto NAT'
+
+
+def _norm(name):
+    return re.sub(r'[\s_\-]+', '_', (name or '').lower()).strip('_')
 
 
 def _ace(line):

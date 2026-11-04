@@ -89,11 +89,17 @@ GAPS = [
      'part caught by B\'s own static NAT for a host A has no NAT for (or a static on every interface) is B\'s own '
      'device.', 'Check the "OK, site device" lines in the NAT reference view when a device must move at takeover.'),
     (23, 'lina', 'A block is equal when what B lacks is unreachable through B',
-     'A B block on the same mapped zones counts as equal when the only addresses it lacks are private or shared '
-     'address space that B can only send out of its outside default route, and B has no crypto map that could carry '
-     'them. Blocks are placed above B\'s first rule that would allow their traffic, below the narrower B rules that '
-     'carry allows A has above the block.',
-     'Check the position of each new block in FMC before enabling it.'),
+     'An assumption: a B block on the same mapped zones counts as equal when the only addresses it lacks are private or '
+     'shared address space that B\'s config sends only out of its outside default route, with no crypto map that could '
+     'carry them. B can learn routes dynamically (OSPF, BGP) that make them reachable another way; the config does not '
+     'show that. Blocks are placed above B\'s first rule that would allow any of their traffic, below the B rules that '
+     'carry an A allow that is above the block in A\'s order and takes some of its traffic.',
+     'Run show route for those addresses on B, and check the position of each new block in FMC before enabling it.'),
+    (24, 'lina', 'Shared interfaces are chosen by address',
+     'An interface is shared when B has an interface with the identical IP address and subnet and B\'s copy is shut '
+     'until takeover. Only those are shut on A in the "internet down, firewalls up" steps and brought up on B. The same '
+     'addresses up on both firewalls are taken as two separate site networks; names are not compared.',
+     'If a stretched network is up on both firewalls today, add its shutdown step by hand.'),
 ]
 
 
