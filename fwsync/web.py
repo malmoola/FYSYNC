@@ -296,7 +296,7 @@ h+=`<h3>Whole-firewall checks (${(R.firewide||[]).length})</h3>`+tbl(['check','i
 h+='<h3>Coverage: where every config line was compared</h3>'+tbl(['category','a_lines','b_lines','how','differences','impact','why'],R.coverage||[])+'</details>';
 $('v-takeover').innerHTML=h}
 function renderAll(){$('nav').classList.remove('hide');takeoverView();readinessView();fillScopes();findingsView();decisionsView();planView();show(VIEW)}
-const STC={'Ready':'st-ok','Action needed':'st-act','Decision needed':'st-dec','Check first':'st-chk'};
+const STC={'Ready':'st-ok','Action needed':'st-act','Decision needed':'st-dec','Check first':'st-chk','During failover':'st-chk'};
 const CATS={'Routing':['routing'],'Outbound internet (PAT)':['pat'],'Published servers (inbound)':['inbound'],'Access rules':['rules','objects'],'DNS changes':['inbound'],'Public IPs':[]};
 function readinessView(){const n=R.names;let h=`<h2>Readiness per network</h2><p class=mut>${esc(n.A)} &rarr; ${esc(n.B)}</p>`+R.readiness.map(c=>`<p class="verdict ${c.ready?'ok':'no'}">${esc(c.verdict)}</p><p class=reason>${esc(c.reason||'')}</p>`).join('');
 const cnt=l=>[l.actions?l.actions+' to fix':'',l.decisions?l.decisions+(l.decisions>1?' choices':' choice')+' needed':'',l.checks?l.checks+' to verify':''].filter(x=>x).join(', ');

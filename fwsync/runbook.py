@@ -2,6 +2,7 @@
 grouped by when to act. Each item: subject (subnet or interface), reason, what's wrong, why it matters, what to do
 (FMC path + CLI), how to verify."""
 from .findings import many
+from .netset import IPSet
 
 GROUPS = [('before', 'Fix before failover'), ('during', 'Do during failover'), ('check', 'Check on the firewall'),
           ('later', 'Review later'), ('unprovable', "Can't be proven from this config")]
@@ -38,11 +39,14 @@ def _from_firewide(r, names):
     b = names.get('B_short', names['B'])
     if r['check'].startswith('published'):
         real = r['detail'].split(' -> ')[0]
-        return _item('before', 'thing to fix', r['item'], 'Published on %s with no NAT on %s' % (names['A_short'], b),
+        return _item('later', 'note', r['item'], 'Public address on %s with no NAT on %s: decide whether it must work '
+                     'after failover' % (names['A_short'], b),
                      '%s is published at %s as %s; %s has no NAT for it.' % (real, names['A_short'], r['item'], b),
-                     'During a %s internet outage it is unreachable from the internet.' % names['A_short'],
-                     ['Devices > NAT > <%s NAT policy> > Add Rule: NAT Rule Manual, Type Static, Original Source the '
-                      'server, Translated Source a %s public IP.' % (b, b)],
+                     'Decide which of these must work after failover. Only those need a static NAT on %s; during a %s '
+                     'internet outage the others stay unreachable from the internet.' % (b, names['A_short']),
+                     ['Decide which of these must work after failover. For each one that must: Devices > NAT > <%s NAT '
+                      'policy> > Add Rule: NAT Rule Manual, Type Static, Original Source the server, Translated Source a '
+                      '%s public IP.' % (b, b)],
                      ['nat (<inside>,<outside>) source static <server object> <%s public object>' % b],
                      ['show nat detail', 'show xlate global <%s public IP>' % b], r['id'])
     if r['check'].startswith('A block'):
@@ -61,6 +65,24 @@ def _from_firewide(r, names):
                  ['show access-list CSM_FW_ACL_ | include %s' % r['item']], ['show route <rule source>'], r['id'])
 
 
+def _published(f):
+    try:
+        return IPSet.parse(f.get('a_public') or '')
+    except Exception:
+        return None
+
+
+def _shut_item(c, names):
+    """one 'Do during failover' item for a shut B interface a readiness card points to"""
+    b, ifc = names['B_short'], c['shut_ifc']
+    return _item('during', 'thing to do', ifc, '%s is shut down on %s' % (ifc, b), '%s is shut down on %s; %s is '
+                 'behind it.' % (ifc, b, c['subnet']), 'Traffic on it cannot pass until it is brought up. Bring it up '
+                 'only after %s is really gone.' % names['A_short'],
+                 ['Devices > Device Management > %s > Interfaces > edit %s: tick Enabled > OK > Save, then Deploy.' % (
+                     b, ifc)], ['interface %s' % (c.get('shut_phys') or '<%s physical interface>' % ifc), ' no shutdown'],
+                 ['show interface %s' % ifc, 'show interface ip brief'], 'SHUT-%s' % ifc)
+
+
 def build(res):
     """res['runbook'] = [{key, title, count, items}] in runbook order; res['verdict'] text and counts follow it"""
     names = res.get('names') or {'A': 'A', 'B': 'B'}
@@ -73,7 +95,16 @@ def build(res):
                            'thing to do' if t.get('group') == 'during' else 'note', t.get('subject', t['area']),
                            t['title'], '%s. %s' % (t['title'], t['detail']) if t['detail'] else t['title'],
                            t['action'], t.get('fmc', []), t.get('cli', []), t.get('verify', []), t['id']))
-    items += [_from_firewide(r, names) for r in res.get('firewide', []) if not r.get('row_state')]
+    shown = [s for s in (_published(f) for f in res.get('findings', []) if f['category'] == 'inbound') if s]
+    for r in res.get('firewide', []):
+        if r.get('row_state'):
+            continue
+        if r['check'].startswith('published') and any(IPSet.parse(r['item']).issubset(s) for s in shown):
+            continue
+        items.append(_from_firewide(r, names))
+    for c in res.get('readiness', []):
+        if c.get('shut_ifc') and not any(i['group'] == 'during' and i['subject'] == c['shut_ifc'] for i in items):
+            items.append(_shut_item(c, names))
     groups = [{'key': k, 'title': t, 'items': [i for i in items if i['group'] == k]} for k, t in GROUPS]
     for g in groups:
         g['count'] = len(g['items'])

@@ -48,6 +48,17 @@ Fixes:
 - Findings lead with the subnet. Route labels ("via inside"), chain tags ("A1:inside") and object names such as
   obj-NO_NAT-x are no longer used as network names.
 - B rules that allow more than A are Review later items, not things to fix before failover.
+- A subnet on a shut-down B interface is never "Ready", whether it is connected there or routed behind it. It reads
+  "... - Do during failover: bring up IFACE on B", the reason line carries the same action (also when the subnet has
+  other things to fix), and the runbook gets one "Do during failover" item per shut interface.
+- "B would send it to the internet" is said only when B's matching route is its default route. When a broader
+  non-default route matches, the finding reads "B uses IFACE via ROUTE; A uses IFACE" and the reason says "No specific
+  static route".
+- Public addresses published on A with no NAT on B ("Other public addresses with no NAT on B") are Review later items
+  with the action "Decide which of these must work after failover", not things to fix before failover. A published
+  server that already has its own finding is not listed again, so each one is counted once.
+- Names no longer end with a double bracket ("(DMZ-WEB on A))"), and routing protocols are listed once ("OSPF", not
+  "OSPF, OSPF").
 
 ## 0.5.2 – 2026-11-03
 

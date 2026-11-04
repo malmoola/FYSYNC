@@ -310,7 +310,7 @@ def verdict(res, names):
     rt = [f for f in res.get('findings', []) if f.get('category') == 'routing' and f.get('level') != 'check']
     objs = [o for o in res.get('objects_all', []) if o['status'] in ('different value',)]
     gaps = [('Interfaces up', sum(1 for x in t if x['severity'] == 'blocker')), ('Outbound PAT', len(pat)), ('Routing', len(rt)),
-            ('Published servers', len(inb)), ('Other public addresses with no NAT on B', len(missing_nat)),
+            ('Published servers', len(inb)), ('Other public addresses with no NAT on B (review later)', len(missing_nat)),
             ('Access rules not fully carried over', len(rules)), ('A blocks missing', len(blocks)),
             ('Rules that cannot match on B', len(dead)), ('Objects with another value', len(objs)),
             ('Settings to review', sum(1 for x in t if x['severity'] in ('high', 'review')))]

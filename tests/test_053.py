@@ -182,3 +182,104 @@ def test_report_has_names_howto_and_runbook(tmp_path):
     body = h[h.index('</style>'):details]
     for jargon in ('over-permitted', 'wrong way', 'covered', 'shadowed', 'Decision needed'):
         assert jargon not in body, jargon
+
+
+SHUT_DMZ = ('interface e2\n', 'interface e3\n shutdown\n nameif dmz\n security-level 50\n'
+            ' ip address 198.51.100.65 255.255.255.224\ninterface e2\n')
+BEHIND = 'route dmz 198.51.100.96 255.255.255.240 198.51.100.66 1\n'
+
+
+def test_subnet_on_shut_interface_is_not_ready():
+    a = A + BEHIND
+    b = B.replace(*SHUT_DMZ) + BEHIND
+    res = run([(a, 'fw-alpha.txt')], (b, 'fw-bravo.txt'), None)[0]
+    for p in ('198.51.100.64/27', '198.51.100.96/28'):
+        c = card(res, p)
+        assert c['state'] == 'during' and not c['ready'], c
+        assert c['verdict'] == '%s - Do during failover: bring up dmz on fw-bravo' % c['title']
+        assert 'Do during failover: bring up dmz on fw-bravo' in c['reason']
+        assert c['lines'][0]['label'] == 'Do during failover'
+    rb = {g['key']: g for g in res['runbook']}
+    assert [i['subject'] for i in rb['during']['items']] == ['dmz']
+    assert rb['during']['items'][0]['cli'] == ['interface e3', ' no shutdown']
+    order = [c['state'] for c in res['readiness']]
+    assert order.index('during') > max([i for i, s in enumerate(order) if s == 'not ready'] or [-1])
+
+
+def test_not_ready_subnet_on_shut_interface_names_the_action():
+    a = A + 'route dmz 198.51.100.112 255.255.255.240 198.51.100.66 1\n'
+    b = B.replace(*SHUT_DMZ)
+    res = run([(a, 'fw-alpha.txt')], (b, 'fw-bravo.txt'), {'scope': ['198.51.100.112/28']})[0]
+    c = card(res, '198.51.100.112/28')
+    assert c['state'] == 'not ready'
+    assert c['reason'].endswith('Do during failover: bring up dmz on fw-bravo')
+
+
+def test_broader_route_is_not_called_the_internet():
+    b = B + 'route outside 192.0.2.128 255.255.255.128 203.0.113.2 1\n'
+    f = routing(go(b, scope=['192.0.2.128/26']), '192.0.2.128/26')
+    assert 'internet' not in f['what'] + f['why'] + f['short']
+    assert 'fw-bravo uses outside via 192.0.2.128/25; fw-alpha uses inside' in f['what']
+    assert f['short'].startswith('No specific static route on fw-bravo')
+
+
+def test_default_route_still_says_internet():
+    f = routing(go(scope=['192.0.2.128/26']), '192.0.2.128/26')
+    assert 'internet' in f['what'] and f['short'].startswith('No static route on fw-bravo')
+
+
+def test_check_level_says_specific_when_a_broader_route_matches():
+    b = B + 'route outside 192.0.2.128 255.255.255.128 203.0.113.2 1\n' + OSPF
+    f = routing(go(b, scope=['192.0.2.128/26']), '192.0.2.128/26')
+    assert f['level'] == 'check' and f['short'].startswith('No specific static route on fw-bravo')
+
+
+PUBLISHED = ('object network SRV-WEB\n host 192.0.2.10\n'
+             'object network SRV-WEB-PUB\n host 198.51.100.10\n'
+             'nat (inside,outside) source static SRV-WEB SRV-WEB-PUB\n')
+
+
+def test_other_public_addresses_are_review_later():
+    res = run([(A + PUBLISHED, 'fw-alpha.txt')], (B, 'fw-bravo.txt'), {'scope': ['192.0.2.128/26']})[0]
+    rb = {g['key']: g for g in res['runbook']}
+    assert not [i for i in rb['before']['items'] if i['subject'] == '198.51.100.10/32']
+    later = [i for i in rb['later']['items'] if i['subject'] == '198.51.100.10/32']
+    assert len(later) == 1 and 'Decide which of these must work after failover' in later[0]['fmc'][0]
+    assert res['verdict']['counts']['before'] == sum(1 for i in rb['before']['items'])
+    assert res['verdict']['counts']['later'] == len(rb['later']['items'])
+
+
+WEB_IN = ('access-list CSM_FW_ACL_ remark rule-id 9: L4 RULE: Web-In\n'
+          'access-list CSM_FW_ACL_ advanced permit tcp ifc outside any ifc inside object SRV-WEB eq 443 rule-id 9\n')
+
+
+def test_published_server_in_scope_is_counted_once():
+    a = A.replace('access-group CSM_FW_ACL_ global\n', PUBLISHED + WEB_IN + 'access-group CSM_FW_ACL_ global\n')
+    res = run([(a, 'fw-alpha.txt')], (B, 'fw-bravo.txt'), {'scope': ['192.0.2.0/26']})[0]
+    assert [f['a_public'] for f in res['findings'] if f['category'] == 'inbound'] == ['198.51.100.10']
+    assert res['firewide'][0]['item'] == '198.51.100.10/32'
+    hits = [(g['key'], i) for g in res['runbook'] for i in g['items'] if '198.51.100.10' in i['what']]
+    assert len(hits) == 1 and hits[0][0] == 'before', hits
+    assert sum(g['count'] for g in res['runbook']) == sum(len(g['items']) for g in res['runbook'])
+
+
+def test_name_brackets_balanced_and_protocols_once():
+    from fwsync.findings import balanced, protocols
+    from fwsync.model import Config
+    assert balanced('VLAN 20 DMZ-WEB on fw-alpha)') == 'VLAN 20 DMZ-WEB on fw-alpha'
+    assert balanced('(DMZ-WEB on fw-alpha))') == '(DMZ-WEB on fw-alpha)'
+    assert balanced('(x (y)') == 'x (y)'
+    c = Config('fw-test', 'asa')
+    c.dynamic_routing = ['router ospf 1', 'router ospf 2', 'A1 router bgp 64512']
+    assert protocols(c) == 'OSPF, BGP'
+
+
+def test_translated_name_has_one_closing_bracket():
+    res = go(B + OSPF + 'router ospf 2\n network 192.0.2.128 255.255.255.192 area 0\n', scope=['192.0.2.128/26'],
+             scope_names={'192.0.2.128/26': 'VLAN 20 DMZ-WEB (A 192.0.2.128/26)'})
+    f = routing(res, '192.0.2.128/26')
+    assert 'OSPF, OSPF' not in f['what'] + f['short'] and 'may learn it by OSPF.' in f['short'] + '.'
+    assert 'runs OSPF, so' in f['what']
+    c = card(res, '192.0.2.128/26')
+    assert c['title'] == '192.0.2.128/26 (VLAN 20 DMZ-WEB on fw-alpha)', c['title']
+    assert '))' not in c['verdict'] + f['what']

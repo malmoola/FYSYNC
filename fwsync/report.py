@@ -228,7 +228,8 @@ def readiness_html(res):
                 l.get('checks') and ('%d to verify' % l['checks'])) if x)
             cnt = (' (%s)' % cnt) if cnt else ''
             out.append('<tr><td>%s</td><td class="st %s">%s%s</td><td class=small>%s</td></tr>' % (
-                e(l['name']), {'Ready': 'ok', 'Action needed': 'act', 'Decision needed': 'dec', 'Check first': 'chk'}[l['state']],
+                e(l['name']), {'Ready': 'ok', 'Action needed': 'act', 'Decision needed': 'dec', 'Check first': 'chk',
+                                 'During failover': 'chk'}[l['state']],
                 e(l.get('label', l['state'])), cnt, e(l.get('note', ''))))
         out.append('</table></div>')
     out.append('</div></details>')

@@ -24,7 +24,8 @@ GLOSSARY = {
     'shadowed': 'Blocked by an earlier rule: an earlier {B} rule blocks this traffic before a permit is reached.',
     'denied': '{B} has a rule that blocks this traffic.',
     'missing': '{B} has no rule for this traffic; its default action drops it.',
-    'wrong way': '{B} uses a different path than {A}: it would send this network to the internet, not inside.',
+    'wrong way': '{B} uses a different path than {A}: its best route for this network is its default route to the '
+                 'internet, or a broader route out of another interface.',
     'no route on B': '{B} has no route for this subnet.',
     'other inside interface': '{B} routes this subnet inside, but out of a different inside interface.',
     'ok': 'Ready.',
@@ -89,6 +90,34 @@ def label(status, names):
 
 def many(n, one, more):
     return '%d %s' % (n, one if n == 1 else more)
+
+
+ROUTING_PROTOS = ('ospf', 'bgp', 'eigrp', 'rip', 'isis')
+
+
+def protocols(cfg):
+    """'router ospf 1', 'router ospf 2', 'A1 router bgp 64512' -> 'OSPF, BGP': each protocol once"""
+    out = []
+    for x in cfg.dynamic_routing:
+        w = next((w for w in x.lower().split() if w in ROUTING_PROTOS), x.split()[-1])
+        out.append(w.upper())
+    return ', '.join(dict.fromkeys(out))
+
+
+def balanced(text):
+    """drop brackets left without a partner once words are filtered: 'DMZ-WEB on A)' -> 'DMZ-WEB on A'"""
+    out, opened = [], []
+    for c in text:
+        if c == '(':
+            opened.append(len(out))
+        elif c == ')':
+            if not opened:
+                continue
+            opened.pop()
+        out.append(c)
+    for i in reversed(opened):
+        del out[i]
+    return re.sub(r'\s{2,}', ' ', ''.join(out))
 
 
 def _key(*parts):
@@ -260,7 +289,7 @@ class Ctx:
         n = re.sub(r'\bvia \S+', '', n)
         n = re.sub(r'\b(A[12]):(\S+)', lambda m: '%s on %s' % (m.group(2), self.n.get(m.group(1), m.group(1)).split(' (')[0]), n)
         n = ' '.join(w for w in n.split() if not NOT_A_NAME.search(w.strip('(),')))
-        n = re.sub(r'\(\s*\)', '', n).strip(' ,')
+        n = balanced(re.sub(r'\(\s*\)', '', balanced(n))).strip(' ,')
         return '' if not n or n == p else n
 
     def title(self, p):
@@ -279,6 +308,23 @@ class Ctx:
 
     def owned(self, p):
         return self.owned_map.get(p, '')
+
+    def b_route(self, p):
+        """B's longest-prefix route that holds all of p (connected or static), or None"""
+        from .detect import route_table
+        s = IPSet.parse(p)
+        return next((e for e in route_table(self.B) if s.issubset(e['set'])), None)
+
+    def shut_ifc(self, p):
+        """the shut-down B interface that would carry p: the interface its route on B points to (a connected subnet
+        or a network routed behind it) or the B interface mapped from A's; '' if none is shut"""
+        row = next((r for r in self.res.get('routing', []) if r['subnet'] == p), {})
+        hit = self.b_route(p)
+        for ifc in (hit['ifc'] if hit else '', row.get('expected_b_ifc', '')):
+            i = self.B.interfaces.get(ifc)
+            if i is not None and i.shutdown and ifc not in getattr(self.prof, 'ignored_ifcs', ()):
+                return ifc
+        return ''
 
 
 PROTOS = ('tcp', 'udp', 'icmp', 'ip', 'esp', 'ah', 'gre', 'sctp')
@@ -464,12 +510,22 @@ def routing_findings(ctx):
         nh = ctx.b_nexthop(ifc)
         t, kind, bs = ctx.title(p), ctx.kind(p), ctx.n['B_short']
         net = ipaddress.IPv4Network(p)
-        if r['status'] == 'wrong way':
+        hit = ctx.b_route(p)
+        broader = hit is not None and 0 < hit['plen'] < net.prefixlen
+        a_ifc = r.get('a_ifc') or ifc
+        if r['status'] == 'wrong way' and not broader:
             what = '%s: %s would send it to the internet, not inside. It has no route for this %s and uses its default route.' % (
                 t, ctx.n['B'], kind)
             why = 'Return traffic for this %s would leave %s toward the internet, so sessions to and from it fail when %s takes over.' % (
                 kind, bs, bs)
             short = 'No static route on %s; it would use the default route to the internet' % bs
+        elif r['status'] == 'wrong way':
+            what = '%s: %s uses %s via %s; %s uses %s. %s has no specific static route for this %s.' % (
+                t, ctx.n['B'], hit['ifc'], hit['net'], ctx.n['A_short'], a_ifc, bs, kind)
+            why = 'Traffic for this %s follows the broader route out of %s on %s, not the path %s uses, so sessions to ' \
+                  'and from it can fail when %s takes over.' % (kind, hit['ifc'], bs, ctx.n['A_short'], bs)
+            short = 'No specific static route on %s; it uses %s via %s, %s uses %s' % (
+                bs, hit['ifc'], hit['net'], ctx.n['A_short'], a_ifc)
         elif r['status'] == 'no route on B':
             what = '%s: %s has no route for this %s.' % (t, ctx.n['B'], kind)
             why = '%s drops all traffic to this %s.' % (bs, kind)
@@ -478,12 +534,11 @@ def routing_findings(ctx):
             what = '%s: %s routes it out of %s, expected %s.' % (t, ctx.n['B'], r['b_route'], ifc)
             why = 'Traffic for this %s may take the wrong path through %s.' % (kind, bs)
             short = '%s routes it out of a different interface than %s' % (bs, ctx.n['A_short'])
-        hit = next((e for e in route_table(ctx.B) if IPSet.parse(p).issubset(e['set'])), None)
         conn = ctx.B.interfaces.get(ifc)
         on_ifc = bool(conn and conn.ip) and IPSet.parse(p).issubset(IPSet.net(conn.ip, conn.mask))
         a_vlan = any(e['net'] == p and e['kind'] == 'connected' for e in route_table(ctx.A))
         re_ip = a_vlan and conn is not None and bool(conn.ip) and not on_ifc
-        if hit is not None and hit['plen'] > 0:
+        if hit is not None and hit['plen'] > 0 and r['status'] != 'wrong way':
             what = '%s: %s routes it via %s (%s), not %s.' % (t, ctx.n['B'], hit['ifc'], hit['net'], ifc)
             why = 'Traffic for this %s follows that route, not the interface %s uses.' % (kind, ctx.n['A_short'])
             short = '%s routes it via %s (%s), not %s' % (bs, hit['ifc'], hit['net'], ifc)
@@ -494,11 +549,14 @@ def routing_findings(ctx):
             short = '%s on %s is a different subnet: decide whether this %s moves' % (ifc, bs, kind)
         check = bool(ctx.B.dynamic_routing) and not re_ip
         if check:
-            what = '%s: the %s config has no static route for this %s to %s. %s runs %s, so the route may be learned.' % (
-                t, bs, kind, ifc, bs, ', '.join(ctx.B.dynamic_routing))
+            spec = 'specific ' if broader else ''
+            what = '%s: the %s config has no %sstatic route for this %s to %s. %s runs %s, so the route may be learned.' % (
+                t, bs, spec, kind, ifc, bs, protocols(ctx.B))
+            if broader:
+                what += ' Without it, %s uses %s via %s; %s uses %s.' % (bs, hit['ifc'], hit['net'], ctx.n['A_short'], a_ifc)
             why = 'If %s has not learned it, return traffic for this %s follows another route and sessions fail.' % (bs, kind)
-            short = 'No static route on %s; %s may learn it by %s. Run show route on %s' % (
-                bs, bs, ', '.join(x.split()[1] if len(x.split()) > 1 else x for x in ctx.B.dynamic_routing).upper(), bs)
+            short = 'No %sstatic route on %s; %s may learn it by %s. Run show route on %s' % (
+                spec, bs, bs, protocols(ctx.B), bs)
         evid = []
         rest = IPSet.parse(p)
         for e in route_table(ctx.B):
@@ -1004,14 +1062,19 @@ def decisions(ctx, findings):
     return out
 
 
-CARD_ORDER = {'not ready': 0, 'check': 1, 'ready': 2, 'own': 3}
+CARD_ORDER = {'not ready': 0, 'during': 1, 'check': 2, 'ready': 3, 'own': 4}
 LINE_LABEL = {'Ready': 'Ready', 'Action needed': 'Not ready', 'Decision needed': 'Your choice needed',
-              'Check first': 'Check on firewall'}
+              'Check first': 'Check on firewall', 'During failover': 'Do during failover'}
+
+
+def bring_up(ctx, ifc):
+    return 'Do during failover: bring up %s on %s' % (ifc, ctx.n['B_short'])
 
 
 def readiness(ctx, findings, decs):
     """one card per scope subnet: 'Not ready: 1 thing to fix', 'Check on firewall: 1 thing to verify', 'Ready', or
-    B's own network; not-ready cards first. Counts: level fix = thing to fix, check = to verify on the firewall,
+    B's own network; not-ready cards first. A subnet on a shut-down B interface (connected or routed behind it) is
+    never Ready: 'Do during failover: bring up <interface> on <B>'. Counts: level fix = thing to fix, check = to verify on the firewall,
     choice + open decisions = your choice needed; review-level notes are not counted"""
     cards = []
     need = public_need(ctx, findings)
@@ -1041,6 +1104,11 @@ def readiness(ctx, findings, decs):
                      nd['total'], nd['a'], nd['b'], nd['b_nats'], '' if nd['b_nats'] == 1 else 's', nd['b_total'],
                      '' if nd['b_total'] == 1 else 'es', 'kept' if nd['b_kept'] else 'not kept', nd['c'])),
         ]
+        down = '' if ctx.owned(p) else ctx.shut_ifc(p)
+        if down:
+            lines.insert(0, {'name': 'Interface', 'actions': 0, 'decisions': 0, 'checks': 0, 'during': 1,
+                             'state': 'During failover', 'label': LINE_LABEL['During failover'],
+                             'note': '%s is shut down on %s' % (down, bs)})
         acts = sum(l['actions'] for l in lines if l['name'] != 'DNS changes')
         decn = sum(l['decisions'] for l in lines)
         chk = sum(l['checks'] for l in lines if l['name'] != 'DNS changes')
@@ -1059,14 +1127,23 @@ def readiness(ctx, findings, decs):
                                  chk and many(chk, 'thing to verify', 'things to verify')) if x]
             state, text = 'not ready', '%s - Not ready: %s' % (t, ', '.join(parts))
             reason = first('fix') or first('choice') or next((d['title'] for d in dd), '')
+        elif down:
+            state = 'during'
+            text = '%s - %s' % (t, bring_up(ctx, down))
+            if chk:
+                text += '; %s' % many(chk, 'thing to verify', 'things to verify')
+            reason = '%s is shut down on %s, so this %s cannot pass until it is up' % (down, bs, ctx.kind(p))
         elif chk:
             state, text = 'check', '%s - Check on firewall: %s' % (t, many(chk, 'thing to verify', 'things to verify'))
             reason = first('check')
         else:
             state, text, reason = 'ready', '%s - Ready' % t, 'Nothing in the configs stops %s from carrying this %s.' % (
                 bs, ctx.kind(p))
+        if down:
+            reason = '%s. %s' % (reason, bring_up(ctx, down)) if reason else bring_up(ctx, down)
         cards.append({'subnet': p, 'scope': ctx.label(p), 'title': t, 'name': ctx.name(p), 'lines': lines,
                       'actions': acts, 'decisions': decn, 'checks': chk, 'state': state, 'own': own,
+                      'shut_ifc': down, 'shut_phys': ctx.B.interfaces[down].name if down else '',
                       'ready': state in ('ready', 'own'), 'verdict': text, 'reason': reason})
     cards.sort(key=lambda c: CARD_ORDER[c['state']])
     return cards
