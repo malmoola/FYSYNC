@@ -264,7 +264,8 @@ class LinaAdapter(Adapter):
                 elif t[0] == 'range':
                     o.kind, o.value, o.addrs = 'range', '%s %s' % (t[1], t[2]), IPSet.range(t[1], t[2])
                 elif t[0] == 'fqdn':
-                    o.kind, o.value, o.addrs = 'fqdn', t[-1], IPSet()
+                    v = [x for x in t[1:] if x not in ('v4', 'v6')]      # fqdn [v4] NAME [id N]
+                    o.kind, o.value, o.addrs = 'fqdn', v[0] if v else '', IPSet()
                 elif t[0] == 'description':
                     o.description = b.split(None, 1)[1] if len(t) > 1 else ''
             except Exception as e:

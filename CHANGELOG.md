@@ -154,6 +154,52 @@ Timing and safety:
   any-to-any permit, Block* allow, placeholder public object or live `no nat`). Three test_054b backhaul cases now
   expect the FMC edit instead of `no nat` plus a new line.
 
+### Takeover compare on a real pair (A primary, B takes over)
+
+Root causes found by comparing one real pair end to end; every fix is general logic with a synthetic test
+(tests/test_054d.py).
+
+- Shared interfaces are found by address: the same IP and subnet on both firewalls, with B's copy shut until
+  takeover. Only those are shut in the "internet down, firewalls up" steps (and brought up on B). The same addresses
+  up on both firewalls are two separate site networks.
+- "Not hit on A": when A learns routes (OSPF, BGP) a line is no longer cleared by A's static routes; only A's
+  connected subnets and an earlier A line that takes the traffic first count. The gap list stats count the lines
+  that still use this result.
+- A wrong-interface PAT is one row on the PAT line. A static NAT for a host in that subnet stays its own row: Missing
+  static NAT when A has an inbound rule for it, else "Only if allow-listed".
+- A B static for the same host and public IP on another interface is a Change at outage that edits that rule, never
+  a second rule.
+- An identity NAT on B moves at outage only when it takes traffic to a static's public IP (destination any, the
+  static's address inside it). Identity NATs with a specific destination are left alone.
+- Source "any" is the traffic entering that real interface; it is no longer expanded into A's routed subnets, which
+  could include outside or public B blocks.
+- Rules: coverage ignores rule names (same or broader addresses and ports on the mapped zones). A rule only B has
+  gives Wrong zone only when an A rule B does not carry today needs that zone.
+- FQDN allows: an FQDN object written "fqdn [v4] NAME id N" is read correctly, and its ACE lines are no longer dropped
+  when an interface is ignored. Every line is compared; a B block that would stop one gives one Missing allow,
+  positioned above that block. An any-to-any L7 block (URL categories) cannot prove it stops the traffic.
+- L7 Block* rules match only a B block on the same mapped zones that holds their addresses and ports; one that is any
+  to any in LINA is "Compare in FMC" unless B has the same rule with the same lines.
+- Blocks are placed above B's first rule that would allow their traffic, below the narrower B rules carrying allows A
+  has above the block. The report never says to add an A allow first. A B block that lacks only private or shared
+  address space B can reach only through its outside default route (and no crypto map) is equal.
+- New NAT brings the A exemptions above it (second pass, also for internal and reused static NATs). A NAT or
+  exemption whose real interface is shut on B, or that could answer ARP, is "Now disabled".
+- One row per A line and interface pair: an exemption that splits into CIDRs and B lines is one row, above the
+  first B line it needs to precede ("the proposed rule" for a proposed one; no "line 0").
+- An exemption whose destination A routes with its own static route and B routes another way is "If route needed".
+  An exemption or internal NAT to any is compared for the networks B routes out of that interface, so a B NAT
+  limited to the group of all inside networks covers a destination-any NAT on A.
+- A public IP in a block where B has a single isolated NAT line is a Decision with no NAT command (two or more B lines
+  show that the block moves with B).
+- Site devices ("OK, site device"): NATs that only reach the ISP edge or gateway, statics whose only inbound rules
+  come from the edge routers (and lines that share their public IP), public IPs in B's own block, hosts whose B twin
+  in the same rules has its own public NAT, and exemption parts caught by B's own static NAT for a host A has no NAT
+  for. A subnet B reaches through an interface of its own is B's site network.
+- Scanner and other L7 rows for a rule B has on fewer zones say which zone to add. Inbound rules to a host whose
+  public IP is a decision are a Decision row.
+- The top verdict is the gap list's; the older runbook keeps its items and its own text (verdict.runbook_text).
+
 ## 0.5.3 – 2026-11-03
 
 Takeover check: can B carry the traffic when A fails.

@@ -87,8 +87,8 @@ def test_ospf_makes_check_first_not_action():
     assert c['verdict'] == '192.0.2.128/26 - Check on firewall: 1 thing to verify'
     assert c['lines'][0]['state'] == 'Check first' and c['lines'][0]['label'] == 'Check on firewall'
     assert res['verdict']['counts']['check'] == 1 and res['verdict']['counts']['before'] == 0
-    assert 'fw-bravo can take over from fw-alpha: 0 things to fix before failover' in res['verdict']['text']
-    assert '1 to check on the firewall' in res['verdict']['text']
+    assert 'fw-bravo can take over from fw-alpha: 0 things to fix before failover' in res['verdict']['runbook_text']
+    assert '1 to check on the firewall' in res['verdict']['runbook_text']
 
 
 def test_singular_thing_to_fix_and_reason():
@@ -159,7 +159,7 @@ def test_runbook_groups_and_four_parts():
                                                     'Review later', "Can't be proven from this config"]
     assert [i['subject'] for i in rb['during']['items']] == ['dmz']
     assert rb['during']['items'][0]['cli'] == ['interface e3', ' no shutdown']
-    assert '1 to do during failover' in res['verdict']['text']
+    assert '1 to do during failover' in res['verdict']['runbook_text']
     for g in res['runbook']:
         for i in g['items']:
             assert i['subject'] and i['reason'] and i['what'] and i['why'] and i['fmc'] and i['cli'] and i['verify'], i

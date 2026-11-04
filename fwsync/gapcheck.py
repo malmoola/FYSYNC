@@ -122,11 +122,17 @@ def backhaul_identity(ctx, out):
         shut = sorted({x for x, part in route_split(B, m.real) if x and x != m.real_ifc and _shut(B, x)})
         if not shut or m.real_ifc in ('any', '') or m.real_ifc in shut:
             continue
-        ctx.handled.add(id(m))
-        line = natorder.line_of(m)
+        if m.dst_real is not None and not m.dst_real.is_any():
+            continue                     # limited to one destination: it never takes traffic to a published server
         over = [n for n in natorder.ordered(B) if n is not m and not n.inactive and n.kind == 'static'
                 and not nat_kind(n).startswith('identity') and n.real is not None and not n.real.is_any()
-                and n.real.issubset(m.real) and n.real_ifc in (None, '', 'any', *shut) and n.order > m.order]
+                and ((n.real.issubset(m.real) and n.real_ifc in (None, '', 'any', *shut)) or
+                     (n.mapped is not None and not n.mapped.is_any() and n.mapped.issubset(m.real)))
+                and n.order > m.order]
+        if not over:
+            continue                     # it catches no traffic to a static's address: nothing to move
+        ctx.handled.add(id(m))
+        line = natorder.line_of(m)
         notes = '; '.join('%s (%s)' % (n.obj or n.real_ref, 'auto NAT' if n.section == 'auto' else
                                        'manual NAT line %d' % natorder.line_of(n)) for n in over[:12])
         new = [re.sub(r'^nat \(([^,]+),([^)]+)\)( after-auto)?', lambda x, i=i: 'nat (%s,%s) after-auto' % (

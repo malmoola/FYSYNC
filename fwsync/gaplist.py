@@ -18,8 +18,8 @@ from collections import Counter
 from dataclasses import replace
 
 from . import natorder
-from .compare import PERMIT, any_any, block_name, effective_rules, fqdn_names, fqdn_value
-from .detect import route_split_up, route_table
+from .compare import PERMIT, _is_default, any_any, tunnel_default, block_name, effective_rules, fqdn_names, fqdn_value
+from .detect import route_split, route_split_up, route_table
 from .netset import IPSet, is_public
 
 WHEN = ('Now', 'Now disabled', 'At outage', 'Decision', 'Confirm use', 'If route needed', 'Compare in FMC',
@@ -134,6 +134,9 @@ class Gaps:
         self.pending = []        # PAT proposals, merged in pats()
         self.later = []          # statics with no inbound rule, judged once the PAT proposals are known
         self.b_seq = order(B.nats)
+        self.site_mapped = []    # public IPs of A lines found to be site devices
+        self.exempts = {}        # missing exemptions, one row per A line and interface pair
+        self.decisions = []      # (A line, addresses) whose public IP on B is a decision
         self.a_seq = order(A.nats)
 
     # ------------------------------------------------------------ helpers
@@ -198,6 +201,75 @@ class Gaps:
     def vpn(self, s):
         return any(s.overlaps(p) for p in self.pools if p)
 
+    def gateways(self):
+        """next hops of A's and B's routes out of their outside interfaces: the ISP edge routers"""
+        g = getattr(self, '_gw', None)
+        if g is None:
+            g = IPSet()
+            for cfg, outs in ((self.A, self.outs_a), (self.B, self.outs_b)):
+                for r in cfg.routes:
+                    if r.ifc in outs and r.nexthop:
+                        try:
+                            g = g | IPSet.parse(r.nexthop)
+                        except ValueError:
+                            pass
+            self._gw = g
+        return g
+
+    def b_outside_nets(self):
+        """B's own outside subnets (a subnet A has too is shared, not B's own)"""
+        a = [IPSet.net('%s/%s' % (i.ip, i.mask)) for i in self.A.interfaces.values() if i.ip and i.mask]
+        return [b for b in (IPSet.net('%s/%s' % (i.ip, i.mask)) for i in self.B.interfaces.values()
+                            if i.ip and i.nameif in self.outs_b) if not any(b.overlaps(x) for x in a)]
+
+    def site_reason(self, n, kind):
+        """why A line n belongs to A's site and needs nothing on B ('' when it does not): it only reaches A's edge or
+        gateway, its public IP is in B's own block, its only inbound rules come from the edge routers, it shares its
+        public IP with such a line, or B has a twin host in the same rules with its own public NAT"""
+        gw = self.gateways()
+        if n.dst_real is not None and not n.dst_real.is_any() and gw and n.dst_real.issubset(gw):
+            return 'it only reaches the ISP edge or gateway'
+        if kind not in ('static', 'internal') or n.kind != 'static' or n.real.is_any():
+            return ''
+        if n.mapped is not None and is_public(n.mapped) and any(n.mapped.issubset(b) for b in self.b_outside_nets()):
+            return 'its public IP %s is in %s\'s own block' % (_cidrs(n.mapped), self.b)
+        if n.mapped is not None and any(n.mapped == x for x in self.site_mapped):
+            return 'it shares its public IP %s with a site device line' % _cidrs(n.mapped)
+        inb = self.a_inbound(n.real)
+        if inb and gw and all(not r.src.is_any() and r.src.issubset(gw) for r in inb):
+            return 'its only inbound rules come from the ISP edge routers (monitoring)'
+        twin = self.b_twin(n, inb)
+        if twin is not None:
+            return '%s has its own host %s in the same rules, with its own public NAT (line %d)' % (
+                self.b, _cidrs(twin.real), lno(twin))
+        return ''
+
+    def b_twin(self, n, inb):
+        """a B static NAT for another host that B's rules of the same names allow next to n's host"""
+        names = {r.rule_name for r in inb if r.rule_name}
+        if not names:
+            return None
+        a_reals = [x.real for x in self.A.nats if x.real is not None and not x.real.is_any() and x.kind == 'static']
+        for b in self.B.rules:
+            if b.rule_name not in names or b.dst.is_any():
+                continue
+            for m in self.b_seq:
+                if m.inactive or m.kind != 'static' or identity(m) or natorder.shared(m) or m.real is None or \
+                        m.real.is_any() or m.real.overlaps(n.real) or not m.real.issubset(b.dst):
+                    continue
+                if not any(m.real.overlaps(x) for x in a_reals):
+                    return m
+        return None
+
+    def b_own(self, m):
+        """B rule m is B's own NAT for one host: a static on every interface, or for a host A has no NAT for"""
+        if m is None or m.kind != 'static' or identity(m) or natorder.shared(m) or m.real is None or m.real.is_any():
+            return False
+        if _any_ifc(m.real_ifc) and _any_ifc(m.mapped_ifc):
+            return True
+        return not any(x.real is not None and not x.real.is_any() and x.kind == 'static' and not identity(x)
+                       and not natorder.shared(x) and x.real.overlaps(m.real) for x in self.A.nats)
+
     def a_kind(self, n):
         if identity(n):
             return 'exempt'
@@ -252,6 +324,7 @@ class Gaps:
         self.pats()
         self.optional_statics()
         self.second_pass()
+        self.flush_exempts()
         self.backhaul()
         self.shared_block()
 
@@ -271,16 +344,31 @@ class Gaps:
                      and not m.inactive and not identity(m)), None)
         if twin is not None:
             return self._ref_row(n, kind, 'OK, site device', [ref(twin)])
-        real = n.real if not n.real.is_any() else self.a_subnets(n.real_ifc)
+        why = self.site_reason(n, kind)
+        if why:
+            if n.mapped is not None and n.kind == 'static':
+                self.site_mapped.append(n.mapped)
+            return self._ref_row(n, kind, 'OK, site device: %s' % why, [])
+        real = n.real if not n.real.is_any() or not _any_ifc(n.real_ifc) else self.a_subnets(n.real_ifc)
         out = self.b_ifc(n.mapped_ifc)
         mapped_home = self.b_ifc(n.real_ifc)
-        if kind == 'hairpin':
+        if kind == 'hairpin' or real.is_any():        # source any: the traffic entering that real interface
             parts = [(mapped_home, real)]
         else:
             parts = homes(self.B, real, mapped_home if not _any_ifc(n.real_ifc) else None, self.b_in, self.outs_b) \
                 if not real.is_any() else [(mapped_home, real)]
         results, b_lines, gaps = [], [], []
+        own = set(self.imap.values()) | {self.b_in, self.b_out}
+        if self.imap and any(ifc not in own and not _any_ifc(ifc) for ifc, p in parts):
+            for ifc, p in parts:
+                if ifc not in own and not _any_ifc(ifc):
+                    results.append('OK, site network: %s reaches %s through its own %s' % (self.b, _cidrs(p), ifc))
+            parts = [(ifc, p) for ifc, p in parts if ifc in own or _any_ifc(ifc)]
         cidrs = [(ifc, IPSet.parse(c)) for ifc, p in parts for c in p.cidrs()] if kind == 'exempt' else parts
+        dsts = [n.dst_real]
+        if kind in ('exempt', 'internal') and (n.dst_real is None or n.dst_real.is_any()) and \
+                (out not in self.outs_b or out not in self.default_ifcs()):
+            dsts = self.nets_via(out) or dsts      # to any = to the networks behind that interface
         for ifc, part in cidrs:
             full, other = part, None
             if kind not in ('static', 'internal') or n.kind != 'static':      # a static still works inbound
@@ -291,7 +379,7 @@ class Gaps:
             if not part:
                 continue
             bad, first = IPSet(), None
-            for x, m in walk(self.b_seq, part, ifc, out, n.dst_real, n.service):
+            for x, m in [y for d in dsts for y in walk(self.b_seq, part, ifc, out, d, n.service)]:
                 b_lines.append(ref(m) if m is not None else '(no NAT on %s for %s from %s)' % (self.b, _cidrs(x), ifc))
                 if kind != 'exempt' and (m is None or identity(m) or (dst_xlate(n) and m.dst_mapped != n.dst_mapped)):
                     bad, first = bad | x, first or m
@@ -309,12 +397,27 @@ class Gaps:
         result = bad[0] if bad else max(set(results), key=results.count) if results else 'OK'
         self._ref_row(n, kind, result, b_lines, gaps)
 
+    def default_ifcs(self):
+        return {r.ifc for r in self.B.routes if r.network == '0.0.0.0' and r.mask == '0.0.0.0'}
+
+    def nets_via(self, ifc):
+        """the networks B routes out of ifc (connected and static, no default)"""
+        out = [e['set'] for e in route_table(self.B) if e['ifc'] == ifc and e['plen'] > 0]
+        i = self.B.interfaces.get(ifc)
+        if i is not None and i.ip and i.mask:              # also a shut interface: its subnet is what it serves
+            c = IPSet.net('%s/%s' % (i.ip, i.mask))
+            if not any(c == x for x in out):
+                out.append(c)
+        return out
+
     def hit_on_a(self, n, part):
         """(the part of `part` whose first match on A is n, the A rule that takes the rest first): an A line that never
         matches some traffic on A is not a gap for that traffic on B"""
         from .detect import route_split
         mine, other = IPSet(), None
         split = route_split(self.A, part)
+        if self.A.dynamic_routing:            # A learns routes we cannot see: only its connected subnets are certain
+            split = self._connected_split(split, n)
         if not _any_ifc(n.real_ifc):          # addresses A routes elsewhere never enter this rule's interface on A
             here = IPSet()
             for i, p in split:
@@ -331,12 +434,31 @@ class Gaps:
                     other = m
         return mine, other
 
+    def _connected_split(self, split, n):
+        """route_split for a config with dynamic routing: an address is placed on another interface only when it is
+        connected there, everything else is assumed to enter the rule's own interface"""
+        conn = [e for e in route_table(self.A) if e['kind'] == 'connected']
+        out, rest = {}, IPSet()
+        for i, p in split:
+            for e in conn:
+                part = p & e['set']
+                if part:
+                    out[e['ifc']] = out.get(e['ifc'], IPSet()) | part
+                    p = p - part
+            rest = rest | p
+        if rest:
+            k = '' if _any_ifc(n.real_ifc) else n.real_ifc
+            out[k] = out.get(k, IPSet()) | rest
+        return list(out.items())
+
     def judge(self, n, kind, ifc, out, x, m):
         """(result, gap name or '') for part x of A line n entering ifc, whose first match on B is m"""
         a_line, addr = ref(n, self.a), _cidrs(x)
         if kind == 'exempt':
             if m is None or identity(m):
                 return ('OK, no translation on %s' % self.b if m is None else 'OK, same exemption'), ''
+            if self.b_own(m):
+                return 'OK, site device: %s\'s own static NAT for this host (line %d)' % (self.b, lno(m)), ''
             return self.missing_exempt(n, ifc, out, x, m)
         if m is not None and not identity(m) and (not dst_xlate(n) or m.dst_mapped == n.dst_mapped):
             if self.site_twin(n, m) or (getattr(n, 'raw_real', None) is not None and n.raw_real != n.real):
@@ -345,8 +467,13 @@ class Gaps:
                 inb = self.b_static(x, ifc, out)
                 if inb is not None:
                     return ('OK, same IP' if self.same_ip(n, inb) else 'OK, %s public IP' % self.b) + ' (inbound)', ''
+                moved = self.moved_static(n, ifc, out, x)
+                if moved is not None:
+                    return self.edit_ifc(n, kind, ifc, out, x, moved)
                 if self.a_inbound(n.real):
                     return self.missing_static(n, ifc, out, x, m)
+                if self.same_ip(n, m):
+                    return 'OK, same IP (no inbound rule on %s)' % self.a, ''
                 g = 'Static NAT (optional)'
                 self.row(g, 'Only if allow-listed', addr, n.real_ref, a_line, ref(m, self.b),
                          'Nothing needed: %s has no inbound rule to %s, and %s translates it with PAT (line %d). Add '
@@ -354,9 +481,32 @@ class Gaps:
                              self.a, addr, self.b, lno(m), self.a, _cidrs(n.mapped) if n.mapped else 'interface'),
                          [], 'nat')
                 return 'OK, %s public IP (PAT)' % self.b, g
+            if n.kind == 'static' and natorder.shared(n) and natorder.shared(m) and not self.same_ip(n, m):
+                g = 'Static NAT (optional)'               # a fixed public IP for a group: only for allow-lists
+                self.row(g, 'Only if allow-listed', addr, n.real_ref, a_line, ref(m, self.b),
+                         'Nothing needed: %s translates %s with PAT (line %d). %s gives them the fixed public IP %s; '
+                         'add the same only if a partner allow-lists it.' % (self.b, addr, lno(m), self.a,
+                                                                             _cidrs(n.mapped) if n.mapped else '?'),
+                         [], 'nat')
+                return 'OK, %s public IP (PAT)' % self.b, g
             return ('OK, same IP' if self.same_ip(n, m) else 'OK, %s public IP' % self.b), ''
-        wrong = self.wrong_ifc(n, ifc, out, x)
+        wrong = self.wrong_ifc(n, ifc, out, x) if kind != 'hairpin' else None
+        if wrong is not None and kind == 'static' and natorder.shared(wrong) and not natorder.shared(n):
+            moved = self.moved_static(n, ifc, out, x)      # a static stays its own row, the PAT line gets the edit
+            if moved is not None:
+                return self.edit_ifc(n, kind, ifc, out, x, moved)
+            if self.a_inbound(n.real):
+                return self.missing_static(n, ifc, out, x, m)
+            g = 'Static NAT (optional)'
+            self.row(g, 'Only if allow-listed', _cidrs(x), n.real_ref, ref(n, self.a), ref(wrong, self.b),
+                     'Nothing needed: %s has no inbound rule to %s, and line %d translates it with PAT once its source '
+                     'interface is fixed (see Wrong source interface). Add a static NAT only if a partner allow-lists '
+                     '%s\'s public IP %s.' % (self.a, _cidrs(x), lno(wrong), self.a,
+                                              _cidrs(n.mapped) if n.mapped else 'interface'), [], 'nat')
+            return g, g
         if wrong is not None:
+            if any(k == 'edit' and y is wrong and i == ifc for k, y, i in self.fixed):
+                return 'Wrong source interface (same edit as line %d)' % lno(wrong), ''
             return self.edit_ifc(n, kind, ifc, out, x, wrong)
         if kind == 'static' and m is None and not self.a_inbound(n.real) and self._inactive_b(x, out) is None:
             self.later.append((n, ifc, out, x))
@@ -375,6 +525,16 @@ class Gaps:
         return next((y for y in self.b_seq if not y.inactive and y.kind == 'static' and not identity(y)
                      and not natorder.shared(y) and y.real is not None and not y.real.is_any() and x.issubset(y.real)
                      and _ifc_ok(y.real_ifc, ifc) and _ifc_ok(y.mapped_ifc, out)), None)
+
+    def moved_static(self, n, ifc, out, x):
+        """a B static for the same host and public IP on another real interface: edit it, never add a duplicate"""
+        for m in self.b_seq:
+            if m.inactive or m.kind != 'static' or identity(m) or natorder.shared(m) or m.real is None or \
+                    m.real.is_any() or _any_ifc(m.real_ifc) or m.real_ifc == ifc:
+                continue
+            if _ifc_ok(m.mapped_ifc, out) and x.issubset(m.real) and n.mapped is not None and m.mapped == n.mapped:
+                return m
+        return None
 
     def wrong_ifc(self, n, ifc, out, x):
         """a translating B rule for these addresses toward out, on another real interface"""
@@ -478,7 +638,7 @@ class Gaps:
         blk = self.a_block(n.mapped)
         lines = [m for m in self.b_seq if not m.inactive and m.mapped is not None and not m.mapped.is_any()
                  and m.mapped.overlaps(IPSet.parse(blk))]
-        return bool(lines), blk, lines
+        return len(lines) > 1, blk, lines       # one isolated B line does not show that the block moves
 
     def a_block(self, s):
         for i in self.A.interfaces.values():
@@ -527,9 +687,9 @@ class Gaps:
                                                                           dst and '; Destination translation as on %s' %
                                                                           self.a, '; untick Enable' if reuse else '')]
                      + [c for o in objs + pobjs for c in o['cli']] + [cli], 'nat', objs + pobjs)
-            if not reuse:
-                self._add('manual-before', 'static', ifc, out, x, pub, n.mapped, name, pat=False)
+            self._add('manual-before', 'static', ifc, out, x, pub, n.mapped, name, pat=False)
             return what, what
+        self.decisions.append((n, x))
         self.row(what, 'Decision', addr, name, a_line, why,
                  'Choose a %s public IP for %s: %s\'s %s is in %s, and %s has no NAT in that block. Then add a static '
                  'NAT for %s to it.' % (self.b, addr, self.a, _cidrs(n.mapped), blk, self.b, addr),
@@ -557,18 +717,24 @@ class Gaps:
         arp = n.mapped is not None and any(
             e['kind'] == 'connected' and e['ifc'] == out and n.mapped.overlaps(e['set']) for e in route_table(self.B)) \
             and self.up(out)
+        down = not self.up(ifc)          # the host is reached another way today: the NAT would divert its traffic
         sec = 'after-auto ' if n.section == 'manual-after' else ''
-        cli = 'nat (%s,%s) %ssource %s %s %s%s' % (ifc, out, sec, n.kind, name, pub, ' inactive' if arp else '')
-        self.row('Missing internal NAT', 'Now disabled' if arp else 'Now', addr, name, a_line,
+        off = arp or down
+        cli = 'nat (%s,%s) %ssource %s %s %s%s' % (ifc, out, sec, n.kind, name, pub, ' inactive' if off else '')
+        self.row('Missing internal NAT', 'Now disabled' if off else 'Now', addr, name, a_line,
                  ref(m, self.b) if m else '(none)',
                  'Add the internal NAT %s -> %s between %s and %s%s.' % (
                      addr, _cidrs(n.mapped) if n.mapped else n.mapped_ref, ifc, out,
                      ' disabled; enable it at outage (its address is on %s\'s %s subnet, so it would answer ARP '
-                     'today)' % (self.b, out) if arp else ''),
+                     'today)' % (self.b, out) if arp else
+                     ' disabled; enable it at outage (%s is shut on %s today, so the NAT would send this traffic '
+                     'there)' % (ifc, self.b) if down else ''),
                  ['Devices > NAT > %s > Add Rule: Manual, %s; Source %s -> Destination %s; Original Source %s; '
                   'Translated Source %s%s.' % (self.ctx.natp, n.kind.title(), ifc, out, name, pub,
-                                               '; untick Enable' if arp else '')]
+                                               '; untick Enable' if off else '')]
                  + [c for o in objs + pobjs for c in o['cli']] + [cli], 'nat', objs + pobjs)
+        self._add(n.section if n.section != 'auto' else 'manual-before', n.kind, ifc, out, x, pub, n.mapped, name,
+                  pat=n.kind == 'dynamic', dst=n.dst_real if n.dst_real is not None and not n.dst_real.is_any() else None)
         return 'Missing internal NAT', 'Missing internal NAT'
 
     def missing_hairpin(self, n, ifc, out, x, m):
@@ -582,28 +748,74 @@ class Gaps:
         return 'Hairpin PAT', 'Hairpin PAT'
 
     def missing_exempt(self, n, ifc, out, x, m, because=''):
-        a_line, addr = ref(n, self.a), _cidrs(x)
-        name, objs = self.obj(x, '' if x != n.real else n.real_ref)
-        dn, dobjs = self.obj(n.dst_real, '') if n.dst_real is not None else ('any', [])
-        live = any(i == ifc for i, p in route_split_up(self.B, x)) and self.up(ifc)
-        dst = ' destination static %s %s' % (dn, dn) if n.dst_real is not None else ''
-        cli = 'nat (%s,%s) source static %s %s%s no-proxy-arp route-lookup%s' % (
-            ifc, out, name, name, dst, ' inactive' if live else '')
-        req = 'Add a NAT exemption for %s -> %s from %s to %s above line %d%s.' % (
-            addr, _cidrs(n.dst_real) if n.dst_real is not None else 'any', ifc, out, lno(m) if m else 0,
-            ', disabled; enable it at outage (this traffic flows through %s today)' % self.b if live else '')
-        if because:
-            req += ' Needed because of the fix: %s.' % because
-        self.row('Missing NAT exemption', 'Now disabled' if live else 'Now', addr, name, a_line,
-                 '%s translates it: %s' % (self.b, ref(m, self.b)), req,
-                 ['Devices > NAT > %s > Add Rule: Manual, Static, Before Auto NAT, above line %d; Source %s -> '
-                  'Destination %s; Original Source %s, Translated Source %s%s; tick Do not proxy ARP and Perform route '
-                  'lookup%s.' % (self.ctx.natp, lno(m) if m else 0, ifc, out, name, name,
-                                 '; Original and Translated Destination %s' % dn if dst else '',
-                                 '; untick Enable' if live else '')]
-                 + [c for o in objs + dobjs for c in o['cli']] + [cli], 'nat', objs + dobjs,
-                 note='second pass' if because else '')
+        """collected per A line and interface pair: one row however many CIDRs and B lines it splits into"""
+        k = (id(n), ifc, out)
+        if k not in self.exempts:
+            self.exempts[k] = {'n': n, 'ifc': ifc, 'out': out, 'parts': [], 'because': []}
+        self.exempts[k]['parts'].append((x, m))
+        if because and because not in self.exempts[k]['because']:
+            self.exempts[k]['because'].append(because)
         return 'Missing NAT exemption', 'Missing NAT exemption'
+
+    def _above(self, ms):
+        """'line N' for the first B line (evaluation order) of ms, or 'the proposed rule'"""
+        real = [m for m in ms if m is not None and m.line != '(proposed)' and lno(m)]
+        if real:
+            first = min(real, key=lambda m: (natorder.SECTION.get(m.section, 0), self.b_order(m)))
+            return 'line %d' % lno(first)
+        return 'the proposed rule'
+
+    def b_order(self, m):
+        for i, y in enumerate(self.b_seq):
+            if y is m or (y.line == m.line and lno(y) == lno(m)):
+                return i
+        return len(self.b_seq)
+
+    def a_static_route(self, s, ifc):
+        """A has its own static route (not the default) for part of s out of ifc"""
+        return any(e['kind'].startswith('static') and e['plen'] > 0 and e['ifc'] == ifc and e['set'].overlaps(s)
+                   for e in route_table(self.A))
+
+    def flush_exempts(self):
+        for e in self.exempts.values():
+            n, ifc, out = e['n'], e['ifc'], e['out']
+            x = IPSet()
+            for p, m in e['parts']:
+                x = x | p
+            ms = list({id(m): m for p, m in e['parts'] if m is not None}.values())
+            a_line, addr = ref(n, self.a), _cidrs(x)
+            name, objs = self.obj(x, '' if x != n.real else n.real_ref)
+            dn, dobjs = self.obj(n.dst_real, '') if n.dst_real is not None else ('any', [])
+            routed = n.dst_real is None or n.dst_real.is_any() or any(
+                i == out for i, p in route_split(self.B, n.dst_real)) or not self.a_static_route(n.dst_real, n.mapped_ifc)
+            live = (any(i == ifc for i, p in route_split_up(self.B, x)) and self.up(ifc)) or not self.up(ifc) or \
+                any(m.line == '(proposed)' or getattr(m, 'inactive', False) for m in ms) or bool(e['because'])
+            above = self._above(ms)
+            dst = ' destination static %s %s' % (dn, dn) if n.dst_real is not None else ''
+            cli = 'nat (%s,%s) source static %s %s%s no-proxy-arp route-lookup%s' % (
+                ifc, out, name, name, dst, ' inactive' if live else '')
+            when = 'If route needed' if not routed else 'Now disabled' if live else 'Now'
+            req = 'Add a NAT exemption for %s -> %s from %s to %s above %s%s.' % (
+                addr, _cidrs(n.dst_real) if n.dst_real is not None else 'any', ifc, out, above,
+                ', disabled; enable it at outage (%s)' % (
+                    'it goes with a fix that is added disabled' if e['because'] else
+                    'this traffic flows through %s today' % self.b if self.up(ifc) else
+                    '%s is shut on %s today' % (ifc, self.b)) if live else '')
+            if not routed:
+                req = '%s routes %s another way than %s today, so this only matters if it gets %s\'s route (see ' \
+                      'Route on %s). Then: %s' % (self.b, _cidrs(n.dst_real), out, self.a, self.b, req)
+            if e['because']:
+                req += ' Needed because of the fix: %s.' % '; '.join(e['because'])
+            self.row('Missing NAT exemption', when, addr, name, a_line,
+                     '%s translates it: %s' % (self.b, '; '.join(ref(m, self.b) if m.line != '(proposed)' else
+                                                                 'the proposed rule' for m in ms[:4])), req,
+                     ['Devices > NAT > %s > Add Rule: Manual, Static, Before Auto NAT, above %s; Source %s -> '
+                      'Destination %s; Original Source %s, Translated Source %s%s; tick Do not proxy ARP and Perform '
+                      'route lookup%s.' % (self.ctx.natp, above, ifc, out, name, name,
+                                           '; Original and Translated Destination %s' % dn if dst else '',
+                                           '; untick Enable' if live else '')]
+                     + [c for o in objs + dobjs for c in o['cli']] + [cli], 'nat', objs + dobjs,
+                     note='second pass' if e['because'] else '')
 
     def second_pass(self):
         """walk A's exemptions again with the proposed fixes applied: an exemption the fixes make necessary"""
@@ -612,11 +824,19 @@ class Gaps:
         seq = []
         for m in self.B.nats:
             ed = next((ifc for k, x, ifc in self.fixed if k == 'edit' and x is m), None)
-            seq.append(replace(m, real_ifc=ed) if ed else m)
+            if ed:
+                c = replace(m, real_ifc=ed)
+                c.lineno = lno(m)
+                seq.append(c)
+            else:
+                seq.append(m)
         seq += [x for k, x, ifc in self.fixed if k == 'add']
         seq = order(seq)
         for n in natorder.ordered(self.A):
             if n.inactive or n.real is None or not identity(n) or n.real.is_any():
+                continue
+            r = next((x for x in self.nat_ref if x['line'] == lno(n) and x['text'] == n.line), None)
+            if r is not None and r['result'].startswith(('OK, site', 'Not checked')):
                 continue
             out = self.b_ifc(n.mapped_ifc)
             for ifc, part in homes(self.B, n.real, self.b_ifc(n.real_ifc), self.b_in, self.outs_b):
@@ -625,13 +845,14 @@ class Gaps:
                     before = walk(self.b_seq, x, ifc, out, n.dst_real)
                     after = walk(seq, x, ifc, out, n.dst_real)
                     for (p, m) in after:
-                        if m is None or identity(m) or m.line != '(proposed)' and not any(
+                        if m is None or identity(m) or self.b_own(m) or m.line != '(proposed)' and not any(
                                 k == 'edit' and getattr(y, 'line', '') == m.line for k, y, i in self.fixed):
                             continue
                         if any(mb is not None and not identity(mb) for pb, mb in before if pb.overlaps(p)):
                             continue          # already reported in the first pass
                         self.missing_exempt(n, ifc, out, p, m, because='%s for %s' % (
-                            'the new PAT' if m.line == '(proposed)' else 'the edited line %d' % lno(m), _cidrs(m.real)))
+                            'the proposed %s' % ('PAT' if m.kind == 'dynamic' else 'NAT') if m.line == '(proposed)' else
+                            'the edited line %d' % lno(m), _cidrs(m.real)))
                         r = next((x for x in self.nat_ref if x['line'] == lno(n) and x['text'] == n.line), None)
                         if r is not None:
                             r['result'] = 'Missing NAT exemption (needed because of a fix)'
@@ -690,6 +911,14 @@ class Gaps:
             if name not in done:
                 done.add(name)
                 self.block_rule(name, [], [x for x in self.A.rules if (x.rule_name or x.rule_id) == name])
+        byname = {}
+        for x in self.A.rules:
+            byname.setdefault(x.rule_name or x.rule_id, []).append(x)
+        for name, xs in byname.items():
+            if name not in done and any(x.action in PERMIT and not x.inactive and fqdn_names(self.A, x) for x in xs):
+                done.add(name)
+                self.fqdn_rule(name, xs)
+        self.decision_rules(byname, done)
         self.a_blocks(done)
         self.zone_moves()
         self.every_rule(groups, held)
@@ -698,6 +927,26 @@ class Gaps:
                 self.review.append({'rule': r['rule'], 'line': lno(r.get('_rule')), 'src': r['src'], 'dst': r['dst'],
                                     'service': r['service'], 'status': '%s allows more than %s' % (self.b, self.a),
                                     'detail': r.get('a_rules', '')})
+
+    def decision_rules(self, byname, done):
+        """A inbound rules (not compared) to a host whose public IP is a decision: the allow waits for that choice"""
+        seen = set()
+        for n, x in self.decisions:
+            for r in self.a_inbound(x):
+                name = r.rule_name or r.rule_id
+                if name in done or name in seen:
+                    continue
+                seen.add(name)
+                xs = [y for y in byname.get(name, []) if not y.inactive]
+                self.row('Missing allow', 'Decision', _flow(xs), name, self._lines_ref(xs), '(none)',
+                         'Rule "%s" allows inbound traffic to %s, whose public IP on %s is a decision (see Missing '
+                         'static NAT). Once the address is chosen, add the allow for %s on %s%s.' % (
+                             name, n.real_ref or _cidrs(x), self.b, _cidrs(x), self.b,
+                             ' (copy it in FMC with its conditions: it is an L7 rule)' if any(
+                                 getattr(y, 'l7', False) for y in xs) else ''),
+                         ['Decision: after the public IP for %s is chosen, Policies > Access Control > %s > add rule '
+                          '"%s" for %s as on %s.' % (n.real_ref or _cidrs(x), self.ctx.acp, name, _cidrs(x), self.a)],
+                         'rule')
 
     def _rule_line(self, rows):
         x = rows[0]['_rule'] if rows else None
@@ -718,20 +967,27 @@ class Gaps:
             return self.block_rule(name, rows, rules)
         if all(s == 'covered' for s in sts):
             return
+        if self.site_rule(rules):
+            return
         l7 = any(getattr(x, 'l7', False) for x in rules)
         if 'compare in FMC' in sts or any(any_any(x) for x in rules) or (l7 and any(_broad(x) for x in rules)):
+            add = self.zones_to_add(name, rules)
             self.row('L7 rule', 'Compare in FMC', addr, name, a_line, self._b_line(rows),
-                     'Compare rule "%s" in FMC: its URL, application or other L7 conditions are not in this config. '
-                     'Copy it in FMC with its conditions, never as a plain L3/L4 rule.' % name,
-                     ['FMC: Policies > Access Control > rule "%s" on %s and %s: Applications, URLs, Geolocation.' % (
-                         name, self.a, self.b)], 'rule')
+                     ('%s has rule "%s" but not on zone%s %s: add %s to it in FMC (keep its other zones and its '
+                      'conditions).' % (self.b, name, 's' if len(add) > 1 else '', ', '.join(add), ', '.join(add))
+                      if add else
+                      'Compare rule "%s" in FMC: its URL, application or other L7 conditions are not in this config. '
+                      'Copy it in FMC with its conditions, never as a plain L3/L4 rule.' % name),
+                     ['FMC: Policies > Access Control > rule "%s" on %s%s: %sApplications, URLs, Geolocation.' % (
+                         name, self.b, ' (compare with %s)' % self.a,
+                         'add Zone%s %s; ' % ('s' if len(add) > 1 else '', ', '.join(add)) if add else '')], 'rule')
             return
         fq = rows[0].get('fqdn')
         if fq:
-            return self.fqdn_rule(name, rows, f)
+            return self.fqdn_rule(name, rules, f)
         if any(s == 'not compared (FQDN)' for s in sts):
             return
-        bad = [r for r in rows if r['status'] not in ('covered',)]
+        bad = [r for r in rows if r['status'] not in ('covered',) and not self.mapped_cover(r['_rule'])]
         if not bad:
             return
         cfg, objs = self._fix(f) if f is not None else self._spec(name, bad)
@@ -778,62 +1034,173 @@ class Gaps:
         cfg = list(f['fix'].get('fmc', [])) + [c for o in objs for c in o.get('cli', [])] + list(f['fix'].get('cli', []))
         return cfg, objs
 
-    def fqdn_rule(self, name, rows, f):
-        """an A FQDN allow: a gap when B has no rule naming the FQDN and B's first rule for the traffic is a block"""
-        r = rows[0]
-        x = r['_rule']
-        fq = r['fqdn']
-        if r['status'] == 'covered':
-            return
-        want = {s: set(v) | {fqdn_value(self.A, n) for n in v if fqdn_value(self.A, n)} for s, v in fq.items()}
-        si, di = r['b_src_ifc'], r['b_dst_ifc']
-        si, di = (None if si == 'any' else si), (None if di == 'any' else di)
+    def fqdn_rule(self, name, rules, f=None):
+        """an A FQDN allow, line by line: B's first rule for the line is a block (an L4 deny; an L7 block's LINA line
+        cannot prove it stops this traffic) and B has no rule naming the FQDN. One Missing allow row, above that block"""
         groups = self.B.access_groups or {'CSM_FW_ACL_': 'global'}
-        for b in self.B.rules:
-            if b.acl not in groups or b.action == 'ignore':
+        blocked, first = [], None
+        for x in rules:
+            fq = fqdn_names(self.A, x)
+            if x.inactive or x.action not in PERMIT or not fq:
                 continue
-            if b.inactive or not _ifc_ok(b.src_ifc, si) or not _ifc_ok(b.dst_ifc, di) or not b.svc.overlaps(x.svc):
-                continue
-            bf = fqdn_names(self.B, b)
-            if b.action in PERMIT and all(want[s] & (set(bf.get(s, [])) | {fqdn_value(self.B, n) for n in bf.get(s, [])})
-                                          for s in fq):
-                return                                           # B names the same FQDN
-            if any(not getattr(x, s).overlaps(getattr(b, s)) for s in ('src', 'dst') if s not in fq):
-                continue
-            if any(not getattr(b, s).is_any() and not bf.get(s) for s in fq):
-                continue                                         # a rule for other addresses, not this FQDN
-            if b.action in PERMIT and not block_name(b.rule_name):
-                return                                           # B allows it with a broader rule
-            names = ', '.join(n for v in fq.values() for n in v)
-            cfg, objs = self._fix(f)
-            self.row('FQDN allow blocked on %s' % self.b, 'Now', names, name, ref(x, self.a), ref(b, self.b),
-                     '%s rule "%s" (line %d) would stop it and %s has no rule naming %s. Add the FQDN allow above that '
-                     'block.' % (self.b, b.rule_name or b.rule_id, lno(b), self.b, names),
-                     cfg or ['Policies > Access Control > %s > Add Rule above "%s": Action Allow, %s -> %s, %s.' % (
-                         self.ctx.acp, b.rule_name or b.rule_id, r['src'], r['dst'], r['service'])], 'rule', objs)
+            want = {s: set(v) | {fqdn_value(self.A, n) for n in v if fqdn_value(self.A, n)} for s, v in fq.items()}
+            si, di = self.b_ifc(x.src_ifc), self.b_ifc(x.dst_ifc)
+            si, di = (None if si == 'any' else si), (None if di == 'any' else di)
+            for b in self.B.rules:
+                if b.acl not in groups or b.action == 'ignore' or b.inactive:
+                    continue
+                if not _ifc_ok(b.src_ifc, si) or not _ifc_ok(b.dst_ifc, di) or not b.svc.overlaps(x.svc):
+                    continue
+                bf = fqdn_names(self.B, b)
+                if b.action in PERMIT and all(want[s] & (set(bf.get(s, [])) | {fqdn_value(self.B, n) for n in bf.get(s, [])})
+                                              for s in fq):
+                    break                                        # B names the same FQDN
+                if any(not getattr(x, s).overlaps(getattr(b, s)) for s in ('src', 'dst') if s not in fq):
+                    continue
+                if any(not getattr(b, s).is_any() and not bf.get(s) for s in fq):
+                    continue                                     # a rule for other addresses, not this FQDN
+                l7b = b.action != 'deny' and (b.action not in PERMIT or block_name(b.rule_name, self.prof.l7_suspect))
+                if l7b and any_any(b):
+                    continue                                     # an any-to-any L7 block: its conditions are only in FMC
+                if b.action in PERMIT and not l7b:
+                    if x.svc.covered_by(b.svc) or b.svc.is_any():
+                        break                                    # B allows it with a broader rule
+                    continue
+                blocked.append(x)
+                if first is None or b.seq < first.seq:
+                    first = b
+                break
+        if not blocked:
             return
+        names = ', '.join(dict.fromkeys(n for x in blocked for v in fqdn_names(self.A, x).values() for n in v))
+        cfg, objs = self._fix(f)
+        pos = 'above rule "%s" (line %d)' % (first.rule_name or first.rule_id, lno(first))
+        self.row('Missing allow', 'Now', names, name, self._lines_ref(blocked), ref(first, self.b),
+                 '%s rule "%s" (line %d) would stop %d of %d line%s of this FQDN allow, and %s has no rule naming %s. '
+                 'Add the FQDN allow %s.' % (self.b, first.rule_name or first.rule_id, lno(first), len(blocked),
+                                             len([x for x in rules if not x.inactive]),
+                                             '' if len(rules) == 1 else 's', self.b, names, pos),
+                 cfg or ['Policies > Access Control > %s > Add Rule %s: Name "%s", Action Allow, Zones %s -> %s, '
+                         'Networks %s -> %s, Ports %s (all lines of %s\'s rule).' % (
+                             self.ctx.acp, pos, name, self.b_ifc(blocked[0].src_ifc), self.b_ifc(blocked[0].dst_ifc),
+                             blocked[0].src_ref, blocked[0].dst_ref,
+                             ', '.join(dict.fromkeys(x.svc_ref for x in blocked)), self.a)], 'rule', objs)
+
+    def mapped_cover(self, x):
+        """A rule line x is covered on B on the zones it maps to: same or broader addresses and ports, rule names
+        ignored"""
+        from .compare import eval_slice
+        si, di = self.b_ifc(x.src_ifc), self.b_ifc(x.dst_ifc)
+        st = eval_slice(effective_rules(self.B), None if si == 'any' else si, None if di == 'any' else di,
+                        x.src, x.dst, x.svc)
+        return st[0] == 'covered'
+
+    def site_rule(self, rules):
+        """every source is an ISP edge router or gateway: monitoring of A's own edge, nothing for B"""
+        gw = self.gateways()
+        return bool(gw) and all(not x.src.is_any() and x.src.issubset(gw) for x in rules)
+
+    def zones_to_add(self, name, rules):
+        """B has a rule of this name: the mapped zones of A's lines it lacks"""
+        same = [b for b in self.B.rules if not b.inactive and (b.rule_name or '') == name]
+        if not same:
+            return []
+        add = []
+        for x in rules:
+            if x.inactive:
+                continue
+            if not any(self.zones_ok(b, x) for b in same):
+                for side in ('src_ifc', 'dst_ifc'):
+                    z = self.b_ifc(getattr(x, side))
+                    if z != 'any' and not any(_any_ifc(getattr(b, side)) or getattr(b, side) == z for b in same) \
+                            and z not in add:
+                        add.append(z)
+        return add
 
     def block_rule(self, name, rows, rules):
-        """a Block* rule whose LINA line shows permit is an L7 block: never covered, shadowed or an allow"""
-        rules = rules or [x for x in self.A.rules if (x.rule_name or x.rule_id) == name]
+        """a Block* rule whose LINA line shows permit is an L7 block: never covered, shadowed or an allow. Its LINA line
+        any to any: compare in FMC. Otherwise it matches only a B block on the same mapped zones that holds its
+        addresses and ports"""
+        rules = [x for x in (rules or [x for x in self.A.rules if (x.rule_name or x.rule_id) == name]) if not x.inactive]
         if not rules:
             return
         x = rules[0]
-        groups = self.B.access_groups or {'CSM_FW_ACL_': 'global'}
-        same = [b for b in self.B.rules if not b.inactive and b.acl in groups and ((b.rule_name or '') == name or (
-            (b.action in BLOCKS or block_name(b.rule_name)) and _cover(b, x)))]
-        if same:
-            return
         addr = _flow(rules)
-        pos = self.position(x)
+        if any(any_any(y) for y in rules):
+            same = [b for b in self.B.rules if not b.inactive and (b.rule_name or '') == name]
+            if same and all(any(_ace(b.line) == _ace(self._mapped_line(y)) for b in same) for y in rules):
+                return                    # the same rule with the same LINA lines on the mapped zones
+            self.row('L7 rule' if same else 'Missing block', 'Compare in FMC', addr, name, self._lines_ref(rules),
+                     ref(same[0], self.b) if same else '(none)',
+                     'Compare block "%s" in FMC: its LINA line is any to any, so its conditions (applications, URLs, '
+                     'countries) are only in FMC. %s' % (name, 'B has a rule of the same name: confirm its zones and '
+                                                         'conditions match.' if same else
+                                                         'B has no rule of that name: copy it with its conditions.'),
+                     ['FMC: Policies > Access Control > rule "%s" on %s and %s: zones, Applications, URLs, '
+                      'Geolocation.' % (name, self.a, self.b)], 'rule')
+            return
+        if all(self.equal_block(y) is not None for y in rules):
+            return
+        pos = self.position(rules)
         objs = self._block_objs(rules)
-        self.row('Missing block', 'Now', addr, name, ref(x, self.a), '(no equal block)',
-                 '%s blocks this with "%s" (an L7 block: LINA shows permit). Add the same block on %s, %s.' % (
-                     self.a, name, self.b, pos),
+        self.row('Missing block', 'Now', addr, name, self._lines_ref(rules), '(no equal block)',
+                 '%s blocks this with "%s" (an L7 block: LINA shows permit). %s has no block on the same zones for these '
+                 'addresses. Add the same block on %s, %s.' % (self.a, name, self.b, self.b, pos),
                  ['Policies > Access Control > %s > Add Rule %s: Name "%s", Action Block, Zones %s -> %s, Networks %s -> '
                   '%s, Ports %s; copy its Applications, URLs and other conditions from %s\'s rule in FMC.' % (
                       self.ctx.acp, pos, name, self.b_ifc(x.src_ifc), self.b_ifc(x.dst_ifc), x.src_ref, x.dst_ref,
                       x.svc_ref, self.a)] + [c for o in objs for c in o['cli']], 'rule', objs)
+
+    def _mapped_line(self, x):
+        return re.sub(r'\bifc (\S+)', lambda mm: 'ifc %s' % self.b_ifc(mm.group(1)), x.line)
+
+    def _lines_ref(self, rules):
+        return ref(rules[0], self.a) + (' (+%d lines)' % (len(rules) - 1) if len(rules) > 1 else '')
+
+    def zones_ok(self, b, x):
+        """B rule b is on the zones A rule x maps to (any on B holds every zone)"""
+        for side in ('src_ifc', 'dst_ifc'):
+            want = getattr(x, side)
+            if _any_ifc(want):
+                if not _any_ifc(getattr(b, side)):
+                    return False
+                continue
+            if not _any_ifc(getattr(b, side)) and getattr(b, side) != self.b_ifc(want):
+                return False
+        return True
+
+    def equal_block(self, x):
+        """a B block (deny, L7 block) on the same mapped zones that holds A block line x's addresses and ports"""
+        groups = self.B.access_groups or {'CSM_FW_ACL_': 'global'}
+        for b in self.B.rules:
+            if b.inactive or b.acl not in groups:
+                continue
+            l7b = b.action in ('unknown', 'l7block') or (b.action in PERMIT and block_name(b.rule_name, self.prof.l7_suspect))
+            if b.action != 'deny' and not l7b:
+                continue
+            if l7b and (not (getattr(x, 'l7', False) or x.action in ('unknown', 'l7block')) or any_any(b)):
+                continue                  # an L4 block needs an L4 block; an any-to-any L7 block proves nothing
+            if _is_default(b):
+                continue                  # the default action sits below every allow: it is not an equal block
+            if not self.zones_ok(b, x):
+                continue
+            if _cover(b, x):
+                return b
+            rest = x.dst - b.dst
+            if rest and _cover(replace(b, dst=b.dst | rest), x) and self.unreachable(rest):
+                return b                  # what it lacks B cannot reach anyway
+        return None
+
+    def unreachable(self, s):
+        """addresses B can only send to the internet by its default route, and that are not routable there (private or
+        shared address space), with no VPN (crypto map) that carries them: a block for them changes nothing on B"""
+        if is_public(s) or re.search(r'^crypto map \S+ \d+ match address ', self.b_text, re.M):
+            return False
+        for i, p in route_split(self.B, s):
+            if i not in self.outs_b or any(e['plen'] > 0 and e['ifc'] == i and e['set'].overlaps(p)
+                                           for e in route_table(self.B)):
+                return False
+        return True
 
     def _block_objs(self, rules):
         from .findings import net_objects
@@ -845,14 +1212,31 @@ class Gaps:
                         out.append(o)
         return out
 
-    def position(self, x):
-        """after the B rules that carry A's allows above this block, else above B's broad allow"""
-        above = [r for r in self.res.get('rules', []) if r['_rule'].seq < x.seq and r['_rule'].src.overlaps(x.src)
-                 and r['_rule'].dst.overlaps(x.dst)]
-        bs = [m for r in above for m in r.get('_b', [])]
-        if bs:
-            last = max(bs, key=lambda m: m.seq)
-            return 'below rule "%s" (line %d), after the allows that match it' % (last.rule_name or last.rule_id, lno(last))
+    def position(self, rules):
+        """in A's order: below the B rules that carry A's narrower allows above this block, then above the first B rule
+        that would allow all of this traffic (else part of it), else above B's anchor rule. A broad B allow that holds
+        the whole block is never a reason to put the block under it: there it would never match"""
+        rules = rules if isinstance(rules, (list, tuple)) else [rules]
+        first_a = min(x.seq for x in rules)
+        groups = self.B.access_groups or {'CSM_FW_ACL_': 'global'}
+        allows = [b for b in self.B.rules if not b.inactive and b.acl in groups and b.action in PERMIT and
+                  not block_name(b.rule_name, self.prof.l7_suspect) and not tunnel_default(b)]
+
+        def hits(b, full):
+            return any(self.zones_ok(b, x) and (_cover(b, x) if full else (
+                b.src.overlaps(x.src) and b.dst.overlaps(x.dst) and b.svc.overlaps(x.svc))) for x in rules)
+        carriers = [m for r in self.res.get('rules', []) if r['_rule'].seq < first_a for m in r.get('_b', [])
+                    if m in allows and hits(m, False) and not hits(m, True)]
+        last = max(carriers, key=lambda m: m.seq) if carriers else None
+        below = ('below rule "%s" (line %d), which carries an allow %s has above this block, and ' % (
+            last.rule_name or last.rule_id, lno(last), self.a)) if last is not None else ''
+        for full in (True, False):
+            for b in allows:
+                if (last is None or b.seq > last.seq) and hits(b, full):
+                    return '%sabove rule "%s" (line %d), the first %s rule that would allow %s traffic' % (
+                        below, b.rule_name or b.rule_id, lno(b), self.b, 'this' if full else 'part of this')
+        if last is not None:
+            return below[:-len(', and ')]
         name, sect = self.ctx.anchor
         return 'above rule "%s"' % name if name else 'at the top of the Mandatory section'
 
@@ -864,8 +1248,11 @@ class Gaps:
             rs = r.get('_rules') or []
             if not rs:
                 continue
+            rs = [y for y in rs if not y.inactive]
+            if not rs or all(self.equal_block(y) is not None for y in rs) or self.site_rule(rs):
+                continue
             x = rs[0]
-            pos = self.position(x)
+            pos = self.position(rs)
             objs = self._block_objs(rs)
             cli = []
             for y in rs[:8]:
@@ -874,8 +1261,10 @@ class Gaps:
             deps = r.get('deps') or []
             req = 'Add the same block on %s, %s.' % (self.b, pos)
             if deps:
-                req = 'First add the allows %s has above it (%s), then add the block %s.' % (
-                    self.a, ', '.join(d['rule'] for d in deps[:4]), pos)
+                req += ' On %s, rule%s %s above this block take%s part of its traffic first: check that %s still ' \
+                       'lets that traffic through above the new block.' % (
+                           self.a, 's' if len(deps) > 1 else '', ', '.join('"%s"' % d['rule'] for d in deps[:4]),
+                           '' if len(deps) > 1 else 's', self.b)
             self.row('Missing block', 'Now', _flow(rs), r['item'], ref(x, self.a),
                      '(no equal block)', req,
                      ['Policies > Access Control > %s > Add Rule %s: Name "%s", Action Block, the same zones, networks '
@@ -888,11 +1277,27 @@ class Gaps:
             if r.get('status') != 'add zone':
                 continue
             b = next((x for x in self.B.rules if (x.rule_name or x.rule_id) == r['item']), None)
+            need = self.zone_needed(b, r.get('add_zone') or [])
+            if b is None or not need:
+                continue                  # no A rule needs the zone on this B rule: never a Wrong zone
             self.row('Wrong zone', 'Now', b.src_ref if b else '', r['item'], '', ref(b, self.b),
                      'Add Source Zone %s to rule "%s" and keep %s: %s.' % (', '.join(r['add_zone']), r['item'],
                                                                            r.get('src_ifc'), r['detail']),
                      ['Policies > Access Control > %s > edit rule "%s": add Source Zone %s; keep %s.' % (
                          self.ctx.acp, r['item'], ', '.join(r['add_zone']), r.get('src_ifc'))], 'rule')
+
+    def zone_needed(self, b, zones):
+        """A rules B does not carry today whose traffic, on B's own path, rule b would carry once a zone is added"""
+        out = []
+        for x in self.res.get('rules', []):
+            if x['status'] == 'covered' or x.get('b_src_ifc') not in zones or x.get('fqdn') or \
+                    not x['_rule'].src or not x['_rule'].dst:
+                continue
+            if not _any_ifc(b.dst_ifc) and b.dst_ifc != x.get('b_dst_ifc'):
+                continue
+            if b.action in PERMIT and _cover(b, x['_rule']):
+                out.append(x)
+        return out
 
     def every_rule(self, groups, held):
         """reference: every A rule name, also those with no active lines"""
@@ -984,11 +1389,24 @@ class Gaps:
                           'Later: default-information originate without "always", so the default follows %s\'s '
                           'tracked default route.' % self.a], 'other')
 
+    def shared_ifcs(self):
+        """[(A nameif, B nameif)]: the same IP address and subnet on both firewalls (compared by address, not by name),
+        with B's copy shut until takeover. The same addresses up on both are two separate site networks"""
+        out = []
+        for a in self.A.interfaces.values():
+            if not a.ip or not a.mask or a.shutdown or a.nameif in (self.A.ignored or ()):
+                continue
+            for b in self.B.interfaces.values():
+                if b.ip == a.ip and b.mask == a.mask and (b.shutdown or b.planned):
+                    out.append((a.nameif, b.nameif))
+        return out
+
     def outage(self):
-        shared = [(a, b) for a, b in self.imap.items() if b and b != 'ignore' and a not in self.outs_a
-                  and a in self.A.interfaces and a not in (self.A.ignored or ())]
-        steps1 = ['Shut %s\'s shared interfaces first: %s.' % (self.a, ', '.join(a for a, b in shared) or 'none mapped')] + \
-            ['interface %s / shutdown (on %s)' % (self.A.interfaces[a].name, self.a) for a, b in shared[:8]]
+        shared = self.shared_ifcs()
+        steps1 = ['Shut %s\'s shared interfaces first (same address and subnet as a shut %s interface): %s.' % (
+            self.a, self.b, ', '.join(a for a, b in shared) or 'none found')] + \
+            ['interface %s / shutdown (on %s)' % (self.A.interfaces[a].name, self.a) for a, b in shared] + \
+            ['interface %s / no shutdown (on %s)' % (self.B.interfaces[b].name, self.b) for a, b in shared]
         at = [r for r in self.rows if r['when'] in ('Now disabled', 'At outage')]
         common = ['Do every "Now disabled" and "At outage" row (%d).' % len(at),
                   'Check with packet-tracer on %s, then move DNS and the ISP route for shared blocks.' % self.b]
@@ -1022,7 +1440,9 @@ class Gaps:
         text = ('%s has no gaps compared to %s.' % (self.b, self.a) if not rows else
                 '%d gap%s: ' % (len(rows), '' if len(rows) == 1 else 's') + ', '.join(
                     '%d %s' % (counts[w], w) for w in WHEN if counts[w]) + '.')
+        not_hit = sum(1 for x in self.nat_ref if 'not hit on' in x['result'])
         return {'rows': rows, 'cols': COLS, 'counts': {w: counts[w] for w in WHEN if counts[w]}, 'total': len(rows),
+                'stats': {'not_hit_on_a': not_hit, 'a_dynamic_routing': bool(self.A.dynamic_routing)},
                 'verdict': {'ready': fix == 0, 'text': text}, 'nat_ref': self.nat_ref, 'rule_ref': self.rule_ref,
                 'review': self.review, 'objects': self.object_list(), 'outage': self.cases}
 
@@ -1047,6 +1467,11 @@ def _flow(rules):
     return '%s -> %s' % (side('src'), side('dst'))
 
 
+def _ace(line):
+    """an access-list line without its rule-id and logging tail, for comparing the same rule on two firewalls"""
+    return re.sub(r'\s+rule-id \d+.*$', '', line or '').strip()
+
+
 def _host(s):
     from .findings import sample
     return sample(s)
@@ -1066,6 +1491,19 @@ def build(res, prof, A, B, info, a_text='', b_text=''):
     g = Gaps(res, prof, A, B, info, a_text, b_text)
     res['gaplist'] = g.build()
     return res['gaplist']
+
+
+def align_verdict(res):
+    """the top verdict is the gap list's: the older runbook keeps its items, but its own counts are not a verdict"""
+    g, v = res.get('gaplist'), res.get('verdict')
+    if not g or not isinstance(v, dict) or 'text' not in v:
+        return
+    v['runbook_text'] = v['text']
+    v['ready'] = g['verdict']['ready']
+    v['text'] = g['verdict']['text'] + ' This is the gap list\'s verdict; the older views below keep their items for ' \
+        'reference only.'
+    if res.get('go_nogo'):
+        v['text'] += ' Go/no-go: %s.' % '; '.join(x.split(': ', 1)[1] for x in res['go_nogo'])
 
 
 def config_lines(gl):

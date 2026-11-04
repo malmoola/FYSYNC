@@ -145,6 +145,7 @@ def run(a_list, b, prof=None, parts=None):
     if len(a_list) == 1:
         from . import gaplist
         gaplist.build(res, prof, A, B, info, a_list[0][0], b[0])
+        gaplist.align_verdict(res)
     from . import safety
     safety.enforce(res, ('takeover', 'runbook', 'failback', 'plan', 'gaplist'), B=B)
     if res['safety']['stripped']:

@@ -46,9 +46,10 @@ GAPS = [
      'Check the hit counts (show access-list, show nat detail) of a "Fix before failover" NAT or route on B before '
      'making it.'),
     (14, 'all', 'FQDN objects are matched by name or FQDN and port',
-     'Their addresses are not resolved. An A FQDN allow is reported when B has no rule naming the same FQDN and B\'s '
-     'first rule for that traffic is a block (also an L7 block held by its name, and the default action), or when an '
-     'A block below it would take its traffic. A B allow with any on the FQDN side counts as allowing it.',
+     'Their addresses are not resolved. Every ACE line of an A FQDN allow is compared on its own: it is a Missing allow '
+     'when B has no rule naming the same FQDN and B\'s first rule for that line is an L4 block or an L7 block whose LINA '
+     'line is not any to any (an any-to-any L7 block, such as a URL category block, cannot be proven to stop it), or '
+     'when an A block below it would take its traffic. A B allow with any on the FQDN side counts as allowing it.',
      'Resolve critical FQDN objects by hand.'),
     (15, 'lina', 'Site translation pairs private subnets only',
      'A site-specific subnet is paired only when both sides are private and the same size; other twins are compared '
@@ -65,17 +66,34 @@ GAPS = [
      'With several pools on each side, check that each new rule names the right B pool.'),
     (19, 'lina', 'The NAT walk places a subnet by B\'s routes',
      'Where an A subnet lives on B comes from B\'s connected interfaces (also shut ones), then B\'s static routes, then '
-     'the interface map, then inside. A NAT limited to a service matches only the same service; a destination rule '
-     'matches only when the A destination is inside it. Learned routes are not seen.',
+     'the interface map, then inside; a subnet B reaches through an interface of its own (no A counterpart) is B\'s '
+     'site network. A NAT limited to a service matches only the same service; a destination rule matches only when the '
+     'A destination is inside it; an exemption or internal NAT to any is compared for the networks B routes out of that '
+     'interface. When A learns routes (OSPF, BGP), an A line is only taken as "not hit on A" for its connected subnets '
+     'or when an earlier A line takes the traffic first; the gap list stats count those lines.',
      'Check the reference view "Every A NAT line" for a subnet placed on the wrong interface.'),
     (20, 'lina', 'A public block "routed to A\'s ISP" is A\'s outside subnet',
      'A B NAT whose public address is in A\'s outside subnet (and not in B\'s) depends on A\'s ISP routing that block to '
      'B at outage. Other public blocks routed to A by the ISP are not visible in a config.',
      'Confirm every public block with the ISP; packet-tracer cannot prove it.'),
     (21, 'lina', 'Rule and NAT gaps follow the LINA view of an FTD',
-     'A Block* rule that shows permit is taken as an L7 block, an L7 rule with any (or a /8 or wider) on a side is '
-     '"Compare in FMC", and other L7 rules are copied in FMC with their conditions.',
+     'A Block* rule that shows permit is taken as an L7 block: it matches only a B block on the same mapped zones that '
+     'holds its addresses and ports, and one that is any to any in LINA is "Compare in FMC" unless B has the same rule '
+     'with the same lines. An L7 rule with any (or a /8 or wider) on a side is "Compare in FMC", and other L7 rules are '
+     'copied in FMC with their conditions.',
      'Compare the L7 rules in FMC, or use an FMC snapshot.'),
+    (22, 'lina', 'Site devices are recognised from the config',
+     'An A NAT is "OK, site device" when it only reaches the ISP edge or gateway (the next hops of the outside routes), '
+     'its only inbound rules come from those edge routers, its public IP is in B\'s own outside block or shared with '
+     'such a line, or B\'s rules of the same names hold another host with its own public NAT (B\'s twin). An exemption '
+     'part caught by B\'s own static NAT for a host A has no NAT for (or a static on every interface) is B\'s own '
+     'device.', 'Check the "OK, site device" lines in the NAT reference view when a device must move at takeover.'),
+    (23, 'lina', 'A block is equal when what B lacks is unreachable through B',
+     'A B block on the same mapped zones counts as equal when the only addresses it lacks are private or shared '
+     'address space that B can only send out of its outside default route, and B has no crypto map that could carry '
+     'them. Blocks are placed above B\'s first rule that would allow their traffic, below the narrower B rules that '
+     'carry allows A has above the block.',
+     'Check the position of each new block in FMC before enabling it.'),
 ]
 
 

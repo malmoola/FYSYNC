@@ -28,8 +28,9 @@ def apply(cfg, names):
         if not default and X:
             if r.dst.is_any():
                 r.wide = True
+            had = bool(r.src), bool(r.dst)          # an FQDN side has no addresses to begin with: keep it
             r.src, r.dst = r.src - X, r.dst - X
-            if not r.src or not r.dst:
+            if (had[0] and not r.src) or (had[1] and not r.dst):
                 continue
         keep.append(r)
     dropped = len(cfg.rules) - len(keep)

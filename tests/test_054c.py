@@ -316,7 +316,8 @@ PUB = ('object network WEB2\n host 10.1.0.11\nobject network WEB2-PUB\n host 198
 
 def test_12a_reuse_a_public_ip_when_b_has_nats_in_the_block():
     b = 'object network WEB1\n host 10.1.0.10\nobject network WEB1-PUB\n host 198.51.100.10\n' \
-        'nat (inside,outside) source static WEB1 WEB1-PUB\n'
+        'object network WEB3\n host 10.1.0.13\nobject network WEB3-PUB\n host 198.51.100.13\n' \
+        'nat (inside,outside) source static WEB1 WEB1-PUB\nnat (inside,outside) source static WEB3 WEB3-PUB\n'
     r = rows(go(PUB, b), 'Missing static NAT')
     assert len(r) == 1 and r[0]['when'] == 'Now disabled'
     assert 'WEB2-PUB' in cfg(r[0]) and r[0]['config'][-1].endswith(' inactive')
@@ -421,14 +422,14 @@ FQ = 'object network UPDATES\n fqdn updates.example.com\n'
 def test_20a_fqdn_allow_blocked_by_b_rule():
     a = FQ + rule(1, 'Updates', 'permit tcp ifc inside object IN-NET ifc outside object UPDATES eq 443')
     b = FQ + rule(1, 'Block-Web', 'deny tcp ifc inside object IN-NET ifc outside any eq 443')
-    r = [x for x in gl(go(a, b))['rows'] if x['gap'].startswith('FQDN allow blocked')]
-    assert len(r) == 1 and 'above that block' in r[0]['required'] and 'Block-Web' in r[0]['required']
+    r = rows(go(a, b), 'Missing allow')
+    assert len(r) == 1 and 'above rule "Block-Web"' in r[0]['required']
 
 
 def test_20c_fqdn_allow_blocked_by_b_l7_block_rule():
     a = FQ + rule(1, 'Updates', 'permit tcp ifc inside object IN-NET ifc outside object UPDATES eq 443')
     b = FQ + rule(1, 'Block_Web_Apps', 'permit tcp ifc inside object IN-NET ifc outside any eq 443', l7=True)
-    r = [x for x in gl(go(a, b))['rows'] if x['gap'].startswith('FQDN allow blocked')]
+    r = rows(go(a, b), 'Missing allow')
     assert len(r) == 1 and 'Block_Web_Apps' in r[0]['required']
 
 
