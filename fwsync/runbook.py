@@ -50,17 +50,21 @@ def _from_decision(d, names):
 def _from_firewide(r, names):
     b, a = names.get('B_short', names['B']), names['A_short']
     if r['check'].startswith('published'):
-        real = r['detail'].split(' -> ')[0]
-        return _item('later', 'note', r['item'], 'Public address on %s with no NAT on %s: decide whether it must work '
-                     'after failover' % (a, b),
-                     '%s is published at %s as %s; %s has no NAT for it.' % (real, a, r['item'], b),
-                     'Decide which of these must work after failover. Only those need a static NAT on %s; during a %s '
-                     'internet outage the others stay unreachable from the internet.' % (b, a),
-                     ['Decide which of these must work after failover. For each one that must: Devices > NAT > <%s NAT '
-                      'policy> > Add Rule: NAT Rule Manual, Type Static, Original Source the server, Translated Source a '
-                      '%s public IP, on the interface the server is behind.' % (b, b)],
-                     ['show route <server>', 'show nat detail'], ['show nat detail', 'show xlate global <%s public IP>' % b],
-                     r['id'])
+        real = r['detail'].split(' -> ')[0].replace('/32)', ')')
+        ip = r.get('real_ip') or real.split('(')[-1].rstrip(')')
+        pub = r['item'].replace('/32', '')
+        return _item('later', 'note', r['item'], 'Confirm whether %s must be reachable at %s after failover' % (
+                         real, pub),
+                     '%s is published at %s as %s; %s has no NAT for it.' % (real, a, pub, b),
+                     'Only the servers that must work after failover need a static NAT on %s; during a %s internet '
+                     'outage the others stay unreachable from the internet.' % (b, a),
+                     ['Confirm: must %s be reachable from the internet at %s after failover? Decide which of these '
+                      'must work after failover with the server owner. If no, nothing to do. If yes, add a static NAT on %s for it: Devices > NAT > <%s NAT policy> > Add '
+                      'Rule: NAT Rule Manual, Type Static, Original Source %s, Translated Source a %s public IP, on the '
+                      'interface %s is behind, and update DNS for %s.' % (real, pub, b, b, real.split(' (')[0],
+                                                                         b, ip, pub)],
+                     ['show route %s' % ip, 'show nat detail | include %s' % real.split(' (')[0]],
+                     ['show nat detail | include %s' % real.split(' (')[0], 'show route %s' % ip], r['id'])
     if r['check'].startswith('A block'):
         deps = r.get('deps') or []
         fmc = []

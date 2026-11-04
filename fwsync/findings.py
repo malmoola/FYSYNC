@@ -7,6 +7,7 @@ import ipaddress
 import re
 
 from . import natorder
+from .compare import any_any, block_name
 from .netset import IPSet, Service
 
 ORDER = {'routing': 0, 'pat': 1, 'inbound': 2, 'rules': 3, 'objects': 4}
@@ -293,6 +294,8 @@ class Ctx:
                                     'another object.' % (name, self.n['B_short'], bv, key.replace('fqdn:', ''),
                                                          self.n['B_short']))
             return name, True
+        if o is not None and getattr(o, 'pool_b', ''):
+            return safe(o.pool_b), False                # A's VPN pool: named after B's pool, never A's
         if o is not None and o.kind != 'group' and getattr(o, 'raw_addrs', o.addrs) != o.addrs and len(o.addrs.cidrs()) == 1:
             return safe('NET_%s' % o.addrs.cidrs()[0].replace('/32', '').replace('/', '_')), False
         return name, False
@@ -779,6 +782,22 @@ def pat_findings(ctx):
         cov = IPSet()
         for part, n in hit:
             cov = cov | part
+        if hit and b['status'] != 'missing':
+            eb, _ = natorder.best_effective(ctx.B, s, b_in, list(ctx.prof.outside_b or [ctx.b_out]))
+            bcov = IPSet()
+            for part, n in eb:
+                if n is not None and natorder.shared(n):
+                    bcov = bcov | part
+            acov = IPSet()
+            for part, n in hit:
+                if natorder.shared(n):
+                    acov = acov | part
+            if acov.issubset(bcov):
+                continue                                # B translates all that A does: nothing to carry over
+        wrong = pat_wrong_ifc(ctx, s, b_in)
+        if wrong is not None:
+            out.append(pat_edit(ctx, p, key, b, wrong, b_in))
+            continue
         objects = []
         if not hit or cov == s:
             oname, on_b = ctx.bname('', s)
@@ -853,6 +872,51 @@ def pat_findings(ctx):
     return out
 
 
+def pat_wrong_ifc(ctx, s, b_in):
+    """B's own outbound PAT for s that sits on another real interface than the one s is behind: edit that rule"""
+    from .detect import route_split
+    for m in natorder.ordered(ctx.B):
+        if m.inactive or not natorder.shared(m) or m.dst_real is not None or m.real is None or m.real.is_any() or \
+                not s.issubset(m.real) or m.real_ifc in (None, '', 'any', b_in) or m.mapped_ifc not in \
+                set(ctx.prof.outside_b or [ctx.b_out]) | {'any'}:
+            continue
+        if m.real_ifc not in {i for i, part in route_split(ctx.B, m.real)}:
+            return m
+    return None
+
+
+def pat_edit(ctx, p, key, b, m, b_in):
+    """one finding, one fix: edit B's PAT rule onto the interface its addresses are behind, keeping its translated
+    address. A rule that translates traffic today changes only during failover"""
+    bs = ctx.n['B_short']
+    mo = m.mapped_ifc
+    mapped = 'interface' if m.mapped_interface else m.mapped_ref
+    line = natorder.line_of(m)
+    live = ctx.up(m.real_ifc) and ctx.routed_today(m.real, m.real_ifc)
+    fmc = ['%sDevices > NAT > %s > edit line %d, the PAT rule for %s (it already exists on %s, do not add a new one): '
+           'Interface Objects: Source %s (it is %s now), Destination %s; keep Translated Source %s.' % (
+               'During failover: ' if live else '', ctx.natp, line, m.real_ref, bs, b_in, m.real_ifc, mo,
+               'Destination Interface IP' if mapped == 'interface' else mapped)]
+    if m.obj:
+        new = ' nat (%s,%s) dynamic %s' % (b_in, mo, mapped)
+        cli, back = ['object network %s' % m.obj, new], ['object network %s' % m.obj, ' ' + m.line.strip()]
+    else:
+        new = re.sub(r'^nat \([^)]*\)', 'nat (%s,%s)' % (b_in, mo), m.line)
+        cli, back = ['no ' + m.line, new], ['no ' + new, m.line]
+    what = ('%s: %s has outbound PAT for it, but on %s (line %d: %s); its addresses are behind %s.' % (
+        ctx.title(p), ctx.n['B'], m.real_ifc, line, m.line, b_in))
+    h = sample(IPSet.parse(p))
+    return _f(ctx, 'pat', key, [p], what, 'Hosts in this %s do not match the rule, so they cannot reach the internet '
+              'through %s.' % (ctx.kind(p), bs), [ev(ctx.n['B'], m)], fmc, cli, [],
+              ['packet-tracer input %s tcp %s 40000 8.8.8.8 443' % (b_in, h), 'show xlate local %s' % h,
+               'Expected: %s is translated to %s by line %d.' % (h, mapped, line)] + ctx.shut_note(b_in),
+              {'status': b['status'], 'plain_status': 'outbound PAT on another interface', 'fmc_group': 'NAT',
+               'short': 'Outbound PAT for %s is on %s; edit it onto %s' % (p, m.real_ifc, b_in), 'subject': p,
+               'group': 'during' if live else 'before', 'edit': True, '_edits_nat': [m],
+               'undo': {'fmc': ['Devices > NAT > %s > edit line %d: Source %s again, then Deploy.' % (
+                   ctx.natp, line, m.real_ifc)], 'cli': back} if live else None})
+
+
 def pick_host(ctx, s, a_src, b_in, b_out):
     """a test host of s that A translates with the dynamic PAT the finding is about and that no 1:1 NAT on B catches
     first, so the test shows what the finding claims: (address, A's NAT rule for it)"""
@@ -872,7 +936,8 @@ def pick_host(ctx, s, a_src, b_in, b_out):
 
 def zone_edit(ctx, x, si, di):
     """B already has the rule, on other zones: edit it instead of adding one. Keep a zone that carries traffic today
-    (for example from the other site) and add the new one; replace a zone that carries nothing"""
+    (for example from the other site: B routes the addresses there, or the new zone is still shut) and add the new
+    one; replace a zone that carries nothing"""
     from .detect import route_split_up
     fmc, cli, keep_all = [], [], True
     new = x.line
@@ -880,6 +945,7 @@ def zone_edit(ctx, x, si, di):
         if not cur or not want or cur == want or want == 'any':
             continue
         live = any(i == cur for i, part in route_split_up(ctx.B, addrs)) if not addrs.is_any() else ctx.up(cur)
+        live = live or (ctx.up(cur) and not ctx.up(want))      # want is shut: today the traffic still uses cur
         if live:
             fmc.append('%s Zones: add %s and keep %s (it carries traffic today, for example from the other site).' % (
                 side, want, cur))
@@ -936,7 +1002,9 @@ def inbound_findings(ctx):
             real_obj, real_on_b = ctx.bname('', n.real)
         real_obj = safe(real_obj or 'SRV_' + real.replace('/', '_'))
         pub_obj, pub_on_b = (ctx.bname('', IPSet.parse(b_pub)) if b_pub else ('', False))
-        pub_obj = safe(pub_obj) if pub_on_b else safe('PUB_%s_%s' % (host.split('.')[0], bs)) if b_pub else '<public IP object>'
+        a_pub_name = n.mapped_ref if n.mapped_ref in ctx.A.objects and n.mapped_ref not in ctx.B.objects else ''
+        pub_obj = safe(pub_obj) if pub_on_b else safe(a_pub_name or 'PUB_%s_%s' % (host.split('.')[0], bs)) if b_pub \
+            else '<public IP object>'
         objects = [] if real_on_b else [obj_line(real_obj, n.real)]
         if b_pub and nat_st == 'missing' and not pub_on_b:
             objects.append(obj_line(pub_obj, IPSet.parse(b_pub)))
@@ -976,7 +1044,7 @@ def inbound_findings(ctx):
                        '<that interface>, Destination %s, Original Source %s, Translated Source %s.' % (
                            bs, real, sample(n.real), ctx.natp, mo, real_obj, pub_obj))
         elif nat_st == 'missing':
-            line = 'nat (%s,%s) source static %s %s' % (ri, mo, real_obj, pub_obj)
+            line = 'nat (%s,%s) source static %s %s%s' % (ri, mo, real_obj, pub_obj, ' dns' if 'dns' in n.line.split() else '')
             add = ('Devices > NAT > %s > Add Rule: NAT Rule Manual, Type Static, Insert In Category Before Auto NAT; '
                    'Interface Objects: Source %s, Destination %s; Translation: Original Source %s, Translated Source %s'
                    % (ctx.natp, ri, mo, real_obj, pub_obj if b_pub else '<choose a public IP: see Your choices>'))
@@ -1077,8 +1145,11 @@ def rule_findings(ctx):
             continue
         st = min((r['status'] for r in rows), key=lambda x: SEVERITY.get(x, 9))
         first = rules[0]
-        if all(r['status'] == 'compare in FMC' for r in rows):
+        if any(r['status'] == 'compare in FMC' for r in rows) or any(any_any(x) for x in rules):
             out.append(l7_finding(ctx, name, rows, rules))
+            continue
+        if block_name(name, ctx.prof.l7_suspect) and not any(getattr(x, 'override', '') == 'permit' for x in rules):
+            out.append(confirm_finding(ctx, name, rows, rules))
             continue
         def few(vals):
             v = list(dict.fromkeys(x for x in vals if x))
@@ -1159,7 +1230,7 @@ def rule_findings(ctx):
         out.append(_f(ctx, 'rules', _key('brulename', name), sorted({p for x in rows for p in x.get('scopes', [])}), what, why,
                       [ev(ctx.n['B'], x.get('_rule')) for x in rows[:4] if x.get('_rule') is not None], fmc,
                       ['show access-list CSM_FW_ACL_ | include %s' % (r['rule_id'] or name)] +
-                      ['(review) ' + x['line'] for x in rows[:4]], [],
+                      ['(review) ' + x['line'] for x in rows[:4] if x.get('_rule') is None or not any_any(x['_rule'])], [],
                       ['show access-list CSM_FW_ACL_ | include %s' % (r['rule_id'] or name)],
                       {'status': r['status'], 'plain_status': plain(r['status'], ctx.n), 'fmc_group': 'Access Control',
                        'level': 'review', 'short': '%s allows more than %s in rule "%s"' % (ctx.n['B_short'], ctx.n['A_short'], name),
@@ -1170,17 +1241,24 @@ def rule_findings(ctx):
 
 
 def l7_finding(ctx, name, rows, rules):
-    """an L7 rule that shows as any to any in LINA: never copied, never a match; compare it in FMC"""
+    """a rule that shows as any to any (an L7 rule, or any rule whose source and destination are both any): never
+    copied, never a match; compare it in FMC"""
     scopes = sorted({p for r in rows for p in r.get('scopes', [])})
     scopes_any = sorted({p for r in rows for p in r.get('scopes_any', [])})
-    first = rules[0]
-    what = '%s rule "%s" is an L7 rule that shows as any to any in this config (%s -> %s, %s).' % (
-        ctx.dev(''), name, rows[0]['src_ifc'], rows[0]['dst_ifc'], rows[0]['service'])
-    why = ('Its URL, application or geo conditions are not visible here, so the tool cannot tell what it allows. '
-           'Warning: copying it without its conditions would allow all traffic.')
-    fmc = ['Compare in FMC: URL, application or geo conditions are not visible. Open rule "%s" in the %s and %s access '
-           'policies and compare Applications, URLs and Geolocation. Do not copy it from this config.' % (
-               name, ctx.n['A_short'], ctx.n['B_short'])]
+    l7 = any(getattr(x, 'l7', False) for x in rules)
+    what = '%s rule "%s" is %s that shows as any to any in this config (%s -> %s, %s).' % (
+        ctx.dev(''), name, 'an L7 rule' if l7 else 'a rule', rows[0]['src_ifc'], rows[0]['dst_ifc'], rows[0]['service'])
+    if l7:
+        why = ('Its URL, application or geo conditions are not visible here, so the tool cannot tell what it allows. '
+               'Warning: copying it without its conditions would allow all traffic.')
+        fmc = ['Compare in FMC: URL, application or geo conditions are not visible. Open rule "%s" in the %s and %s '
+               'access policies and compare Applications, URLs and Geolocation. Do not copy it from this config.' % (
+                   name, ctx.n['A_short'], ctx.n['B_short'])]
+    else:
+        why = 'Source and destination are both any: the tool never proposes such an allow rule.'
+        fmc = ['Compare in FMC: source and destination are both any. Open rule "%s" in the %s and %s access policies '
+               'and decide with the rule owner whether %s needs it. Do not copy it from this config.' % (
+                   name, ctx.n['A_short'], ctx.n['B_short'], ctx.n['B_short'])]
     evid = [{'device': ctx.dev(''), 'line': getattr(x, 'lineno', 0), 'text': x.line} for x in rules[:3]]
     return _f(ctx, 'rules', _key('rulename', name), scopes, what, why, evid, fmc, [], [], [
         'FMC: Policies > Access Control > rule "%s" on both: the same Applications, URLs and Geolocation' % name],
@@ -1188,6 +1266,24 @@ def l7_finding(ctx, name, rows, rules):
          'level': 'check', 'group': 'check', 'short': 'L7 rule "%s": compare it in FMC (conditions not visible)' % name,
          'subject': 'rule "%s"' % name, 'scopes_any': scopes_any, 'flags': ['L7 any to any: never copy without its '
                                                                             'conditions'], 'rule': name, 'lines': len(rows)})
+
+
+def confirm_finding(ctx, name, rows, rules):
+    """an allow whose name suggests a block: never proposed as Action Allow; its action is confirmed in FMC"""
+    scopes = sorted({p for r in rows for p in r.get('scopes', [])})
+    what = '%s rule "%s" shows as allow in this config (%s -> %s, %s), but its name suggests a block.' % (
+        ctx.dev(''), name, rows[0]['src'], rows[0]['dst'], rows[0]['service'])
+    fmc = ['Confirm the action in FMC: open rule "%s" in the %s access policy and check its Action. If it is Block, '
+           '%s needs the same block, not an allow. If it is Allow, mark it as permit in fwsync > Your choices and '
+           'compare again.' % (name, ctx.n['A_short'], ctx.n['B_short'])]
+    evid = [{'device': ctx.dev(''), 'line': getattr(x, 'lineno', 0), 'text': x.line} for x in rules[:3]]
+    return _f(ctx, 'rules', _key('rulename', name), scopes, what, 'Copying it as an allow could open traffic %s blocks '
+              'today.' % ctx.n['A_short'], evid, fmc, [], [], ['FMC: Policies > Access Control > rule "%s": the Action '
+                                                                'column' % name],
+              {'status': 'confirm action', 'plain_status': 'confirm the action in FMC', 'fmc_group': 'Access Control',
+               'level': 'check', 'group': 'check', 'short': 'Rule "%s": name suggests a block; confirm the action in FMC'
+               % name, 'subject': 'rule "%s"' % name, 'flags': ['name suggests a block'], 'rule': name,
+               'lines': len(rows)})
 
 
 def finalize(ctx, findings):
@@ -1344,7 +1440,7 @@ def decisions(ctx, findings):
         held_seen.add(h['rule'])
         out.append({'id': 'D-held-' + _key(h['rule']), 'kind': 'L7 action', 'title': h['rule'],
                     'text': 'Rule "%s" (%s -> %s %s) shows permit in the config text, but its name says block. '
-                            'Confirm its action in FMC.' % (h['rule'], h['src'], h['dst'], h['service']),
+                            'Confirm the action in FMC.' % (h['rule'], h['src'], h['dst'], h['service']),
                     'options': ['block', 'permit'], 'rule': h['rule'].split(' ∩ ')[0], 'scopes': h.get('scopes', []),
                     'blocking': True})
     seen = set()
@@ -1547,6 +1643,8 @@ def build(res, prof, A, B, info):
     ctx = Ctx(res, prof, A, B, info)
     fs = routing_findings(ctx) + pat_findings(ctx) + inbound_findings(ctx) + rule_findings(ctx) + object_findings(ctx)
     finalize(ctx, fs)
+    from . import safety
+    res['safety'] = safety.enforce({'findings': fs})
     for f in fs:
         keep = []
         for o in f['fix']['objects']:

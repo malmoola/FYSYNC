@@ -38,5 +38,5 @@ def apply(cfg, names):
     cfg.warnings.append('ignored interfaces %s: %d rule lines and %d NATs dropped' % (
         ', '.join(sorted(names)), dropped, len(cfg.nats) - len(nats)))
     cfg.nats = nats
-    cfg._ignored_set = X
+    cfg._ignored_set = (getattr(cfg, '_ignored_set', None) or IPSet()) | X
     return X

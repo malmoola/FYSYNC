@@ -54,6 +54,13 @@ GAPS = [
     (16, 'all', 'FMC reach and server start-up are not in any config',
      'Where FMC lives, whether it can deploy to B when A is lost, and how the servers on shared networks start at B '
      'are listed as items to prove, with a go/no-go for FMC reach.', 'Confirm them before the takeover window.'),
+    (17, 'lina', 'An L7 allow-all is trusted by its shape and name only',
+     'A permit ip from a source zone to any, with a name that does not suggest a block, is taken to allow the narrower '
+     'rules below it; its URL or application conditions are not visible, so each such row says "confirm in FMC".',
+     'Open the L7 rule in FMC and check that its conditions allow that traffic.'),
+    (18, 'lina', 'VPN pools are paired by order',
+     "A's ip local pool maps to B's pool in the order they are defined (or to B's only pool).",
+     'With several pools on each side, check that each new rule names the right B pool.'),
 ]
 
 

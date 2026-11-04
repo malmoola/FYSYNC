@@ -143,8 +143,11 @@ def _ifaces(st):
                 if x.startswith('nameif '):
                     d['nameif'] = x.split()[1]
                 if x.startswith('ip address '):
-                    d['ip'] = x.split()[2]
-                    d['standby'] = 'standby' in x
+                    u = x.split()
+                    d['ip'] = u[2]
+                    d['mask'] = u[3] if len(u) > 3 and u[3] != 'standby' else ''
+                    d['standby'] = 'standby' in u
+                    d['standby_ip'] = u[u.index('standby') + 1] if 'standby' in u[:-1] else ''
                 if x.startswith('policy-route route-map'):
                     d['pbr'] = x.split()[-1]
             if 'nameif' in d:
@@ -267,7 +270,8 @@ def takeover_checks(sa, sb, ta, tb, prof, pairs, na, names, A=None, B=None):
                 'Add the standby IP before failover, then enable interface monitoring.', 'before', m,
                 ['%s > High Availability > Monitored Interfaces > edit %s: Standby IP Address, tick Enable Monitoring '
                  '> OK, then Deploy.' % (dev, m)],
-                ['interface %s' % x['phys'], ' ip address %s <mask> standby <standby IP>' % x.get('ip', '<ip>'),
+                ['interface %s' % x['phys'], ' ip address %s %s standby %s' % (
+                    x.get('ip', '<ip>'), x.get('mask') or d.get('mask') or '<mask>', d.get('standby_ip') or '<standby IP>'),
                  'monitor-interface %s' % m], ['show failover | include %s' % m])
     da, db = _default(sa), _default(sb)
     for n, m, pbr in [(n, prof.interface_map.get(n, n), d['pbr']) for n, d in a.items() if d.get('pbr')

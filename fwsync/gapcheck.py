@@ -34,13 +34,16 @@ def _move(line, ifc, mo=None):
 def nat_precedence(ctx, out):
     """for each published server: walk B's NAT first match from the interface the server is behind after takeover. A
     broader rule above the server's own rule (for example an identity NAT for the whole network, or one on any
-    interface) takes its traffic first"""
+    interface) takes its traffic first. Broader means its addresses contain the server's; a rule that takes only part
+    of them (a host inside a server group) is a partial overlap, reported for review with no reorder"""
     B, bs = ctx.B, ctx.n['B_short']
     for i in ctx.res.get('inbound', []):
         ri, mo = i.get('b_real_ifc'), i.get('b_mapped_ifc')
         if not ri or i.get('row_state') or i['status'].startswith('ready: each'):
             continue
         n, own = i['_nat'], i.get('_b_nat')
+        overlap = False
+        same_a = {x.line for x in ctx.A.nats if not x.inactive}
         for m in natorder.ordered(B):
             if own is not None and m is own:
                 break
@@ -48,7 +51,23 @@ def nat_precedence(ctx, out):
                 break                                    # the new rule goes at the end of Before Auto NAT
             if m.inactive or not natorder.general(m) or not m.real.overlaps(n.real) or m.real == n.real:
                 continue
-            if not (_ifc_ok(m.real_ifc, ri) and _ifc_ok(m.mapped_ifc, mo)):
+            if not (_ifc_ok(m.real_ifc, ri) and _ifc_ok(m.mapped_ifc, mo)) or id(m) in ctx.handled:
+                continue
+            if m.line in same_a and own is not None and own.line in same_a:
+                continue                                 # A has both rules in this order and works with it today
+            if not n.real.issubset(m.real):
+                if not overlap:
+                    overlap = True
+                    line = natorder.line_of(m)
+                    _item(out, 'NATOVERLAP', 'review', 'NAT', 'NAT line %d takes part of the published server %s' % (
+                        line, i['real']), '%s (%s): on %s, NAT line %d (%s, %s) comes first and holds %s of the '
+                        'server\'s addresses, not all of them.' % (i['real'], i['object'], bs, line, m.line, repr(m.real),
+                                                                   repr(m.real & n.real)),
+                        'Review whether these addresses should use line %d or the server\'s own rule. The tool cannot '
+                        'prove a reorder is needed, so it gives no change command.' % line, 'later', i['real'],
+                        ['Review: Devices > NAT > %s: compare line %d with the rule for %s. Change the order only if '
+                         'these addresses must use the server\'s public IP.' % (ctx.natp, line, i['object'])],
+                        ['show nat detail'], ['show nat detail | include %s' % i['object']])
                 continue
             others = m.real - n.real
             today = sorted({x for x, part in route_split_up(B, others) if x and x != ri}) if others else []
@@ -77,14 +96,77 @@ def nat_precedence(ctx, out):
             break
 
 
+def _shut(B, ifc):
+    i = B.interfaces.get(ifc)
+    return i is not None and i.shutdown
+
+
+def _back(B, m, ifc):
+    """the line that puts manual NAT m back where it was: its interface and its position in Before Auto NAT"""
+    line = re.sub(r'^nat \(([^,]+),([^)]+)\)', lambda x: 'nat (%s,%s)' % (ifc, x.group(2)), m.line)
+    if m.section == 'manual-before':
+        pos = [x for x in natorder.ordered(B) if x.section == 'manual-before'].index(m) + 1
+        line = re.sub(r'^(nat \([^)]*\))', lambda x: '%s %d' % (x.group(1), pos), line)
+    return line
+
+
+def backhaul_identity(ctx, out):
+    """an identity NAT on B whose real addresses sit behind a shut B interface: today it carries their traffic to and
+    from the other site over the backhaul, so it is live and changes only during failover. The fix sets its real
+    interface to the shut interface and moves it to After Auto NAT, below the published servers it would otherwise
+    take (auto NATs and the manual NATs under it); failback puts it back"""
+    B, bs = ctx.B, ctx.n['B_short']
+    for m in natorder.ordered(B):
+        if m.inactive or m.real is None or m.real.is_any() or m.obj or not nat_kind(m).startswith('identity'):
+            continue
+        shut = sorted({x for x, part in route_split(B, m.real) if x and x != m.real_ifc and _shut(B, x)})
+        if not shut or m.real_ifc in ('any', '') or m.real_ifc in shut:
+            continue
+        ctx.handled.add(id(m))
+        line = natorder.line_of(m)
+        over = [n for n in natorder.ordered(B) if n is not m and not n.inactive and n.kind == 'static'
+                and not nat_kind(n).startswith('identity') and n.real is not None and not n.real.is_any()
+                and n.real.issubset(m.real) and n.real_ifc in (None, '', 'any', *shut) and n.order > m.order]
+        notes = '; '.join('%s (%s)' % (n.obj or n.real_ref, 'auto NAT' if n.section == 'auto' else
+                                       'manual NAT line %d' % natorder.line_of(n)) for n in over[:12])
+        new = [re.sub(r'^nat \(([^,]+),([^)]+)\)( after-auto)?', lambda x, i=i: 'nat (%s,%s) after-auto' % (
+            i, x.group(2)), m.line) for i in shut]
+        today = sorted({x for x, part in route_split_up(B, m.real) if x})
+        detail = ('%s on %s: identity NAT line %d for %s (%s) is on %s, but these addresses are behind %s, shut down '
+                  'until takeover. Today it carries their traffic to and from the other site (routed via %s), so it '
+                  'is live.' % (m.line, bs, line, m.real_ref, repr(m.real), m.real_ifc, ', '.join(shut),
+                                ', '.join(today) or 'no route'))
+        detail += (' Moved to %s in Before Auto NAT it would override the published servers below it: %s. In After '
+                   'Auto NAT their own rules come first.' % (', '.join(shut), notes)) if notes else ''
+        _item(out, 'NATBACK', 'high', 'NAT', 'Identity NAT line %d (%s) carries traffic to the other site today' % (
+            line, m.real_ref), detail, 'Change it during failover, when %s comes up; failback puts it back.' %
+            ', '.join(shut), 'during', m.real_ref,
+            ['During failover: Devices > NAT > %s > edit line %d: Interface Objects: Source %s instead of %s; Insert In '
+             'Category After Auto NAT%s. Then Deploy.' % (ctx.natp, line, ', '.join(shut), m.real_ifc,
+                                                         ' (below %s)' % notes if notes else '')],
+            ['no ' + m.line] + new,
+            ['show nat detail | include %s' % m.real_ref] + ['packet-tracer input %s tcp %s 40000 8.8.8.8 443' % (
+                i, sample(m.real & dict(route_split(B, m.real)).get(i, m.real))) for i in shut[:1]],
+            {'fmc': ['Devices > NAT > %s > edit the rule for %s: Source %s again, Insert In Category Before Auto NAT '
+                     'where it was (above the published servers\' rules), then Deploy.' % (ctx.natp, m.real_ref, m.real_ifc)],
+             'cli': ['no ' + x for x in new] + [_back(B, m, m.real_ifc)]})
+
+
 def nat_ifc_mismatch(ctx, out):
-    """B NATs (static and dynamic, also PAT objects) whose real addresses are not behind their real interface"""
+    """B NATs (static and dynamic, also PAT objects) whose real addresses are not behind their real interface. A NAT
+    for the VPN pool on the VPN interface is by design (review only); a rule that may be live is never removed
+    outside a proven during-failover change"""
     B, bs = ctx.B, ctx.n['B_short']
     done = {id(i['_b_nat']) for i in ctx.res.get('inbound', []) if i.get('nat_status') == 'wrong interface'}
+    done |= ctx.handled
+    pool = IPSet()
+    for x in getattr(B, 'pools', []) or []:
+        pool = pool | x
+    same_a = {x.line for x in ctx.A.nats if not x.inactive}
     for m in B.nats:
         if m.inactive or id(m) in done or m.real is None or m.real.is_any() or not m.real or \
-                m.real_ifc in (None, '', 'any') or m.real_ifc not in B.interfaces:
-            continue
+                m.real_ifc in (None, '', 'any') or m.real_ifc not in B.interfaces or m.line in same_a:
+            continue                                     # A has the same rule and works with it today
         parts = [(x, part) for x, part in route_split(B, m.real) if x]
         ifcs = {x for x, part in parts}
         if not ifcs or m.real_ifc in ifcs:
@@ -97,6 +179,15 @@ def nat_ifc_mismatch(ctx, out):
                                                                           ', '.join(sorted(ifcs)))
         detail = '%s on %s: %s (%s) is routed via %s, not %s.' % (m.line, bs, m.real_ref, repr(m.real),
                                                                 ', '.join(sorted(ifcs)), m.real_ifc)
+        if pool and m.real.issubset(pool | IPSet.parse(str(_pool_net(m.real)))) and m.real.overlaps(pool) and \
+                m.real_ifc in (list(ctx.prof.outside_b or []) + list(getattr(B, 'ra_ifcs', []))):
+            _item(out, 'NATVPN', 'review', 'NAT', 'NAT line %d (%s) is for the VPN pool on %s' % (
+                line, m.real_ref, m.real_ifc), detail + ' VPN clients arrive on %s, so this is by design.' % m.real_ifc,
+                'Review only: VPN pool addresses on the VPN interface are by design. No change.', 'later', m.real_ref,
+                ['Review: Devices > NAT > %s > line %d: VPN pool %s on %s, where the VPN clients connect. No change '
+                 'needed.' % (ctx.natp, line, m.real_ref, m.real_ifc)], ['show nat detail'],
+                ['show nat detail | include %s' % m.real_ref])
+            continue
         cli = _move(m.line, main) if len(ifcs) == 1 else ['show nat detail', 'show route %s' % sample(m.real)]
         if m.real_ifc in today:
             _item(out, 'NATIFC', 'high', 'NAT', title, detail + ' Today it still works: the traffic arrives on %s.' %
@@ -109,11 +200,14 @@ def nat_ifc_mismatch(ctx, out):
                   {'fmc': ['Devices > NAT > %s > edit line %d: Source Interface %s again, then Deploy.' % (
                       ctx.natp, line, m.real_ifc)], 'cli': [m.line]})
         else:
-            _item(out, 'NATIFC', 'high', 'NAT', title, detail + ' It does not match this traffic today either.',
+            _item(out, 'NATIFC', 'high', 'NAT', title, detail + ' Check its hit count before changing it: it may still '
+                  'carry traffic that reaches %s another way.' % m.real_ifc,
                   'Check its hit count first; then set the interface the addresses are behind.', 'check', m.real_ref,
-                  ['Check first: show nat detail, line %d. Then Devices > NAT > %s > edit it: Source Interface %s.' % (
-                      line, ctx.natp, main if len(ifcs) == 1 else '<the interface B routes it to>')],
-                  cli, ['show nat detail | include %s' % m.real_ref] + ctx.shut_note(main))
+                  ['Check first: show nat detail, line %d (hit count). If it never hits, Devices > NAT > %s > edit it: '
+                   'Source Interface %s.' % (line, ctx.natp, main if len(ifcs) == 1 else
+                                             '<the interface %s routes it to>' % bs)],
+                  ['show nat detail', 'show route %s' % sample(m.real)],
+                  ['show nat detail | include %s' % m.real_ref] + ctx.shut_note(main))
 
 
 def per_exit_pat(ctx, out):
@@ -196,22 +290,28 @@ def nat_kinds(cfg, q, pools, outs):
 
 
 def sibling_nats(ctx, out):
-    """a shared network that lacks NATs A has for it, or that its sibling networks have on B"""
+    """a shared network that lacks a NAT A has for it: reported only with the concrete rule to add, never by
+    analogy with an unrelated sibling network, and not when B has the same NAT for its own twin of the subnet"""
     A, B, prof, bs = ctx.A, ctx.B, ctx.prof, ctx.n['B_short']
     outs_a, outs_b = list(prof.outside_a or []), list(prof.outside_b or [])
     pools_a, pools_b = getattr(A, 'pools', []) or [], getattr(B, 'pools', []) or []
     pat_scopes = {p for f in ctx.res.get('findings', []) if f['category'] == 'pat' for p in f['scopes']}
-    sibs = [e['net'] for e in route_table(B) if e['kind'] == 'connected' and e['ifc'] not in outs_b and e['plen'] < 31
-            and not any(IPSet.parse(e['net']).overlaps(x) for x in pools_b)]
+    conn = {}
+    for e in route_table(B):
+        if e['kind'] == 'connected':
+            conn.setdefault(e['ifc'], e['net'])
     for p in prof.scope:
         s = IPSet.parse(p)
         if ctx.owned(p) or not specific_ifc(B, s) or specific_ifc(B, s) in outs_b:
             continue
         kb = nat_kinds(B, s, pools_b, outs_b)
         ka = nat_kinds(A, s, pools_a, outs_a)
+        a_if = natorder.src_ifc(A, s)
+        twin = conn.get(prof.map_ifc(a_if)) if a_if else None
+        kt = nat_kinds(B, IPSet.parse(twin), pools_b, outs_b) if twin and twin != p else {}
         for k, label in KINDS.items():
-            if k in kb or (k == 'users' and p in pat_scopes):
-                continue
+            if k in kb or (k == 'users' and p in pat_scopes) or k in kt:
+                continue                                 # B has it, or has it for its own twin of this subnet
             if ka.get(k):
                 n = ka[k][0]
                 line, objs = map_nat_line(ctx, n.line) if not n.obj else (n.line, [])
@@ -246,22 +346,6 @@ def sibling_nats(ctx, out):
                           {'fmc': ['Devices > NAT > %s > edit the rule for %s: untick Enable, then Deploy.' % (ctx.natp, p)],
                            'cli': [enable_cli + ' inactive']})
                 continue
-            have = []
-            for q in sibs:
-                if q == p:
-                    continue
-                kq = nat_kinds(B, IPSet.parse(q), pools_b, outs_b).get(k)
-                if kq and not kq[0].real.is_any():
-                    have.append((q, kq[0]))
-            if have:
-                q, n = have[0]
-                _item(out, 'NATSIB', 'review', 'NAT', '%s: no %s on %s; sibling %s has one' % (p, label, bs, q),
-                      'On %s, %s has %s (line %d: %s); %s has none.' % (bs, q, label, natorder.line_of(n), n.line, p),
-                      'Check whether %s needs the same NAT after takeover. The tool cannot be sure, so it gives no '
-                      'command.' % p, 'check', p,
-                      ['Check: does %s need %s like %s (line %d)? If yes, add the same rule for %s in FMC: Devices > '
-                       'NAT > %s.' % (p, label, q, natorder.line_of(n), p, ctx.natp)],
-                      ['show nat detail | include %s' % (n.real_ref or q)], ['show nat detail'])
 
 
 def next_hop_unreachable(ctx, out):
@@ -323,11 +407,20 @@ def unprovable(ctx, out):
            'and the access rules in this report.' % bs], ['show arp'], ['show arp'])
 
 
+def _pool_net(s):
+    """the smallest network holding s (a VPN pool range and its subnet object are one pool)"""
+    lo, hi = s.iv[0][0], s.iv[-1][1]
+    n = 32 - (lo ^ hi).bit_length()
+    return ipaddress.IPv4Network((lo >> (32 - n) << (32 - n), n))
+
+
 def build(res, prof, A, B, info):
     """append the gap checks to res['takeover'] (created when settings did not run)"""
     ctx = Ctx(res, prof, A, B, info)
+    ctx.handled = set()
+    ctx.handled |= {id(m) for f in res.get('findings', []) for m in f.get('_edits_nat', [])}
     out = []
-    for fn in (nat_precedence, nat_ifc_mismatch, per_exit_pat, sibling_nats, next_hop_unreachable, unprovable):
+    for fn in (backhaul_identity, nat_precedence, nat_ifc_mismatch, per_exit_pat, sibling_nats, next_hop_unreachable, unprovable):
         fn(ctx, out)
     res.setdefault('takeover', [])
     res['takeover'] += out

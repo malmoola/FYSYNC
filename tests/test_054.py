@@ -194,11 +194,13 @@ def test_7b_tunnel_default_rules_are_skipped():
     assert not [r for r in res['b_rules'] if 'TUNNEL' in (r['rule'] or '').upper()]
 
 
-def test_7c_l7_any_to_any_on_b_is_not_coverage():
+def test_7c_l7_any_to_any_on_b_is_coverage_only_from_a_zone_and_says_confirm_in_fmc():
     lan = rule(2, 'Lan-Out', 'permit ip ifc inside 192.0.2.0 255.255.255.192 ifc outside any')
     res = go(lan, rule(40, 'Apps', 'permit ip ifc inside any ifc outside any', l7=True))
     r = [x for x in res['rules'] if x['rule'] == 'Lan-Out'][0]
-    assert r['status'] == 'missing'
+    assert r['status'] == 'covered' and 'confirm in FMC' in r['detail']
+    res = go(lan, rule(40, 'Apps', 'permit ip any any', l7=True))
+    assert [x for x in res['rules'] if x['rule'] == 'Lan-Out'][0]['status'] == 'missing'
 
 
 def test_8_pbr_to_the_isp_b_already_uses_needs_no_action():
@@ -301,7 +303,8 @@ def test_15_nat_whose_real_addresses_are_not_behind_its_interface():
     res = go('', b)
     t = [x for x in res['takeover'] if x['area'] == 'NAT' and 'its addresses are behind dmz' in x['title']]
     assert t and t[0]['group'] == 'check'
-    assert t[0]['cli'] == ['object network DMZ-HOSTS', ' nat (dmz,outside) dynamic interface']
+    assert t[0]['cli'] == ['show nat detail', 'show route 192.0.2.65']
+    assert 'Source Interface dmz' in t[0]['fmc'][0]
 
 
 def test_16_pat_on_each_isp():
@@ -333,13 +336,11 @@ def test_17a_nat_a_has_for_a_shared_network():
     assert 'nat (dmz,outside) source static DMZ-NET DMZ-NET destination static VPN-NET VPN-NET' in t[0]['cli'][-1]
 
 
-def test_17b_nat_a_sibling_has_is_a_check_without_a_command():
+def test_17b_nat_only_a_sibling_has_is_not_reported_without_a_concrete_rule():
     b = POOL + 'object network IN-NET\n subnet 192.0.2.0 255.255.255.192\n' \
                'nat (inside,outside) source static IN-NET IN-NET destination static VPN-NET VPN-NET\n'
     res = go('', b, scope=['192.0.2.64/27'])
-    t = [x for x in res['takeover'] if 'no VPN pool to the network on fw-bravo; sibling 192.0.2.0/26 has one' in x['title']]
-    assert t and t[0]['group'] == 'check'
-    assert not [c for c in t[0]['cli'] if c.startswith('nat ')]
+    assert not [x for x in res['takeover'] if x['id'].startswith('T-NATSIB-')]
 
 
 def test_18_fqdn_rules_matched_by_object_name_and_port():
