@@ -19,7 +19,7 @@ def chain(extra=None):
 def test_routing_finding_plain_language_and_fix():
     res = chain()
     f = [x for x in res['findings'] if x['category'] == 'routing' and '10.60.0.0/16' in x['what']][0]
-    assert f['what'].startswith('DR firewall (T1) would send 10.60.0.0/16') and 'not inside' in f['what']
+    assert f['what'].startswith('10.60.0.0/16 (CAMPUS-NET): DR firewall (T1) would send it to the internet') and 'not inside' in f['what']
     assert any(e['device'] == 'DR firewall (T1)' and e['line'] > 0 and e['text'].startswith('route OUTSIDE 0.0.0.0')
                for e in f['evidence'])
     assert f['fix']['cli'] == ['route INSIDE 10.60.0.0 255.255.0.0 10.9.0.2 1']
@@ -38,7 +38,7 @@ def test_inbound_finding_and_verify():
     tt = (t[0].replace('nat (INSIDE,OUTSIDE) source static WEB-SERVER PUB_WEB\n', ''), t[1])
     res = run([e, i], tt, dict(NAMES, public_pool_b=['203.0.113.50-203.0.113.60']))[0]
     f = [x for x in res['findings'] if x['category'] == 'inbound'][0]
-    assert f['host'] == 'WEB' and f['what'] == ('WEB (10.50.1.10/32) is published at Edge + DC firewall on 198.51.100.10 '
+    assert f['host'] == 'WEB' and f['what'] == ('10.50.1.10/32 (WEB) is published at Edge + DC firewall on 198.51.100.10 '
                                                 'tcp 443. DR firewall has no NAT; the access rule is in place.')
     assert f['why'].startswith('During an Edge + DC firewall internet outage')
     assert f['verify'][0] == 'packet-tracer input OUTSIDE tcp 8.8.8.8 40000 203.0.113.50 443'
@@ -52,7 +52,7 @@ def test_readiness_cards_and_states():
     dc = c['10.50.0.0/16']
     assert [l['name'] for l in dc['lines']] == ['Routing', 'Outbound internet (PAT)', 'Published servers (inbound)',
                                                'Access rules', 'DNS changes', 'Public IPs']
-    assert dc['lines'][0]['state'] == 'Ready' and dc['verdict'].startswith('DR firewall can take over')
+    assert dc['lines'][0]['state'] == 'Ready' and dc['verdict'] == '10.50.0.0/16 (DC-NET) - Not ready: 5 things to fix'
     camp = c['10.60.0.0/16']
     assert camp['lines'][0]['state'] == 'Action needed' and not camp['ready']
 

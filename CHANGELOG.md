@@ -15,6 +15,40 @@ Takeover check: can B carry the traffic when A fails.
 - New Takeover tab, report section and CSV exports. Shut interfaces, missing standby IPs, missing PBR, OSPF networks and
   items a config cannot prove are listed with an action.
 
+Report and UI wording, for an engineer who has never seen the tool:
+
+- The Takeover tab and the report are a runbook: Fix before failover, Do during failover, Check on the firewall,
+  Review later, Can't be proven from this config. Each item names its subnet or interface, the reason and the action;
+  the verdict sentence gives the count per group. Shut interfaces, standby IPs and OSPF networks are one item each.
+- Readiness lines read "192.0.2.0/24 (VLAN 20 dmz) - Not ready: 1 thing to fix", "... - Check on firewall: 1 thing to
+  verify" or "... - Ready", with correct singular and plural and a one-line reason. Not-ready networks come first.
+- Every finding and runbook item has the same four parts: What's wrong / Why it matters / What to do (FMC path and
+  CLI) / How to verify.
+- The report starts with the A = / B = mapping and uses the real firewall names after that, then a short "How to read
+  this report". Plain status words replace jargon on screen ("B allows more than A", "uses a different path than A",
+  "same on both", "only partly allowed", "blocked by an earlier rule", "your choice needed"); JSON and CSV keep the
+  internal values. Decisions is now "Your choices".
+- Long raw tables (settings, every object, coverage, whole-firewall checks) are collapsed under Details; tables scroll
+  sideways on a small screen instead of widening the page.
+
+Fixes:
+
+- Next hop of a proposed static route: the lowest-distance route on that interface, broadest non-default first. A
+  floating route (distance 250, or a backup for a prefix another route carries with a lower distance) is never used;
+  with no good route the CLI shows `<next hop on IFACE>`.
+- When B runs OSPF or BGP, a missing static route is "Check first" (counted as "to check on the firewall", not as a
+  thing to fix). The first step is `show route <ip>` on B: if it points to the expected interface, no change is needed;
+  if it points elsewhere, add the route given.
+- A B object group with every A address plus extra entries (status `B has extra entries`) is a low-priority note, not
+  a Readiness action; an object whose B value is wider than A's is a note too. Only A addresses missing from B are a
+  thing to fix, and the fix lists them.
+- Networks owned by B (inside B's outside subnet, a B VPN pool, or B's public range when the sites do not share one)
+  read "B's own network, not part of takeover" and are left out of the verdict counts. Routing rows carry `b_own`.
+- "VLAN" is used only for a connected subnet; routed subnets are a "network", a /32 a "host".
+- Findings lead with the subnet. Route labels ("via inside"), chain tags ("A1:inside") and object names such as
+  obj-NO_NAT-x are no longer used as network names.
+- B rules that allow more than A are Review later items, not things to fix before failover.
+
 ## 0.5.2 – 2026-11-03
 
 Accuracy fixes from a real FTD pair.

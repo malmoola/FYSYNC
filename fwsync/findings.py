@@ -14,14 +14,17 @@ GROUPS = ['Objects', 'Routing', 'NAT', 'Access Control', 'DNS']
 FQDN = re.compile(r'([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\.[A-Za-z]{2,})')
 TEST_NAME = re.compile(r'(?i)(^|[^a-z])(test|tst|qa|dev)([^a-z]|$)|test')
 VERIFY_NAME = re.compile(r'(?i)\[\s*0 hits\s*\]|\[\s*verify\s*\]')
+FLOATING = 250
+NOT_A_NAME = re.compile(r'(?i)^(obj|net|grp|host|range|pat|nat)[-_]|no_?nat|^(FMC|DM)_INLINE|^\d+\.\d+\.\d+\.\d+(/\d+)?$')
+LEVELS = ('fix', 'choice', 'check', 'review')          # thing to fix, your choice needed, check on the firewall, review later
 
 GLOSSARY = {
-    'covered': '{B} permits all of this traffic.',
-    'partial': '{B} permits only part of this traffic (some addresses or ports are missing).',
-    'shadowed': 'An earlier {B} rule blocks this traffic before a permit is reached.',
+    'covered': 'Same on both: {B} permits all of this traffic.',
+    'partial': 'Only partly allowed: {B} permits only part of this traffic (some addresses or ports are missing).',
+    'shadowed': 'Blocked by an earlier rule: an earlier {B} rule blocks this traffic before a permit is reached.',
     'denied': '{B} has a rule that blocks this traffic.',
     'missing': '{B} has no rule for this traffic; its default action drops it.',
-    'wrong way': '{B} would send this subnet to the internet, not inside.',
+    'wrong way': '{B} uses a different path than {A}: it would send this network to the internet, not inside.',
     'no route on B': '{B} has no route for this subnet.',
     'other inside interface': '{B} routes this subnet inside, but out of a different inside interface.',
     'ok': 'Ready.',
@@ -37,12 +40,55 @@ GLOSSARY = {
     'action unknown (L7)': 'The rule has application/URL/user conditions; its real action (allow or block) is only in FMC.',
     'blocked (L7)': 'Marked as a block rule: left out of the compare and the plan.',
     'B only': 'Only {B} has this.',
-    'same name, different value': 'The object exists on both, with different addresses.',
+    'same name, different value': 'The object exists on both, but {B} lacks addresses that {A} has.',
+    'B has extra entries': '{B} has every address {A} has, plus more.',
 }
+
+# what users read instead of the internal status values (JSON keys and CSV values keep the internal ones)
+LABELS = {
+    'covered': 'same on both',
+    'partial': 'only partly allowed',
+    'shadowed': 'blocked by an earlier rule',
+    'wrong way': 'uses a different path than {A}',
+    'over-permitted': '{B} allows more than {A}',
+    'over-permitted (partial)': '{B} allows more than {A} (in part)',
+    'other inside interface': 'uses a different inside interface than {A}',
+    'Decision needed': 'your choice needed',
+}
+
+HOW_TO_READ = [
+    ('Ready', 'Nothing in this config stops {B} from carrying this network when {A} fails.'),
+    ('Not ready', 'At least one thing must be fixed (or chosen) on {B} before failover.'),
+    ('Check on firewall', 'The config cannot prove it, for example a route {B} may learn by OSPF. Run the shown command '
+                          'on {B}; it tells you whether a change is needed.'),
+    ('Thing to fix', 'A change to make on {B} in FMC. Each one lists the FMC path, the CLI and how to verify it.'),
+    ('Your choice needed', 'The tool cannot decide, for example whether to keep a public IP. Pick an option; the '
+                           'choice is saved in the profile.'),
+    ('Scope', 'The networks checked: every subnet {A} serves, unless you changed the list in Setup.'),
+    ('Translated address', "A site-specific {A} address rewritten into {B}'s matching address, so both are compared "
+                           "as they must be on {B}."),
+]
 
 
 def plain(status, names):
     return GLOSSARY.get(status, status).format(A=names['A'], B=names['B'])
+
+
+def named(text, names):
+    """'inactive on B', 'earlier B deny x' -> the real firewall names (only for status and detail strings)"""
+    a, b = names.get('A_short', names['A']), names.get('B_short', names['B'])
+    return re.sub(r'(?<![\w.-])([AB])(?![\w.-])', lambda m: a if m.group(1) == 'A' else b, str(text))
+
+
+def label(status, names):
+    """user-facing text for an internal status value"""
+    if status in LABELS:
+        return LABELS[status].format(A=names.get('A_short', names['A']), B=names.get('B_short', names['B']))
+    return named(status, names)
+
+
+def many(n, one, more):
+    return '%d %s' % (n, one if n == 1 else more)
 
 
 def _key(*parts):
@@ -169,6 +215,7 @@ class Ctx:
             self.pub_reals = self.pub_reals | IPSet.parse(i['real'])
         self.anchor = self._anchor()
         self.specs = {}
+        self.owned_map = {r['subnet']: r['b_own'] for r in res.get('routing', []) if r.get('b_own')}
 
     def _anchor(self):
         """first broad B access permit (e.g. Site-Default-Out) and its section: new rules go above it"""
@@ -190,14 +237,48 @@ class Ctx:
         return self.n.get(tag, self.n['A']) if tag else self.n['A']
 
     def b_nexthop(self, ifc):
+        """next hop of the lowest-distance route on ifc, broadest non-default route first; never a floating route
+        (distance 250+, or a backup for a prefix that another route already carries with a lower distance)"""
         from .detect import route_table
-        for r in route_table(self.B):
-            if r['ifc'] == ifc and r['nexthop'] and r['nexthop'] != 'planned':
-                return r['nexthop']
-        return '<next hop on %s>' % ifc
+        rt = [r for r in route_table(self.B) if r['kind'] != 'connected']
+        best = {}
+        for r in rt:
+            best[r['net']] = min(best.get(r['net'], FLOATING), r['distance'])
+        good = [r for r in rt if r['ifc'] == ifc and r['nexthop'] and r['nexthop'] != 'planned'
+                and r['distance'] < FLOATING and r['distance'] <= best[r['net']]]
+        if not good:
+            return '<next hop on %s>' % ifc
+        return min(good, key=lambda r: (r['distance'], r['plen'] == 0, r['plen']))['nexthop']
 
     def label(self, p):
         return self.prof.scope_names.get(p, p)
+
+    def name(self, p):
+        """a real name for p, or '': route labels ('via inside') and object names (obj-NO_NAT-x) are not names"""
+        n = self.prof.scope_names.get(p, '') or ''
+        n = re.sub(r'\(A (\S+)\)', lambda m: '(%s on %s)' % (m.group(1), self.n['A_short']), n)
+        n = re.sub(r'\bvia \S+', '', n)
+        n = re.sub(r'\b(A[12]):(\S+)', lambda m: '%s on %s' % (m.group(2), self.n.get(m.group(1), m.group(1)).split(' (')[0]), n)
+        n = ' '.join(w for w in n.split() if not NOT_A_NAME.search(w.strip('(),')))
+        n = re.sub(r'\(\s*\)', '', n).strip(' ,')
+        return '' if not n or n == p else n
+
+    def title(self, p):
+        """'192.0.2.0/24 (VLAN 20 dmz)': the subnet first, then a real name if there is one"""
+        n = self.name(p)
+        return '%s (%s)' % (p, n) if n else p
+
+    def kind(self, p):
+        """'VLAN' only for a connected subnet; 'host' for a /32; otherwise 'network'"""
+        from .detect import route_table
+        net = ipaddress.IPv4Network(p, strict=False)
+        if net.prefixlen == 32:
+            return 'host'
+        conn = any(e['net'] == str(net) and e['kind'] == 'connected' for cfg in (self.A, self.B) for e in route_table(cfg))
+        return 'VLAN' if conn else 'network'
+
+    def owned(self, p):
+        return self.owned_map.get(p, '')
 
 
 PROTOS = ('tcp', 'udp', 'icmp', 'ip', 'esp', 'ah', 'gre', 'sctp')
@@ -368,7 +449,7 @@ def _f(ctx, cat, key, scopes, what, why, evidence, fmc, cli, objects, verify, ex
     d = {'id': 'F-' + key, 'key': key, 'category': cat, 'order': ORDER[cat], 'scopes': scopes,
          'scope': ', '.join(ctx.label(p) for p in scopes), 'what': what, 'why': why,
          'evidence': [e for e in evidence if e], 'fix': {'fmc': fmc, 'cli': cli, 'objects': objects},
-         'verify': verify, 'state': st.get('state', 'open'), 'reason': st.get('reason', '')}
+         'verify': verify, 'state': st.get('state', 'open'), 'reason': st.get('reason', ''), 'level': 'fix', 'short': what}
     d.update(extra or {})
     return d
 
@@ -381,33 +462,43 @@ def routing_findings(ctx):
             continue
         p, ifc = r['subnet'], r['expected_b_ifc'] or ctx.b_in
         nh = ctx.b_nexthop(ifc)
-        name = ctx.label(p)
+        t, kind, bs = ctx.title(p), ctx.kind(p), ctx.n['B_short']
         net = ipaddress.IPv4Network(p)
         if r['status'] == 'wrong way':
-            what = '%s would send %s (%s) to the internet, not inside: it has no route for it and uses its default route.' % (
-                ctx.n['B'], p, name)
-            why = 'Return traffic for %s would leave %s toward the internet, so sessions to and from this VLAN fail when %s takes over.' % (
-                name, ctx.n['B_short'], ctx.n['B_short'])
+            what = '%s: %s would send it to the internet, not inside. It has no route for this %s and uses its default route.' % (
+                t, ctx.n['B'], kind)
+            why = 'Return traffic for this %s would leave %s toward the internet, so sessions to and from it fail when %s takes over.' % (
+                kind, bs, bs)
+            short = 'No static route on %s; it would use the default route to the internet' % bs
         elif r['status'] == 'no route on B':
-            what = '%s has no route for %s (%s).' % (ctx.n['B'], p, name)
-            why = '%s drops all traffic to %s.' % (ctx.n['B_short'], name)
+            what = '%s: %s has no route for this %s.' % (t, ctx.n['B'], kind)
+            why = '%s drops all traffic to this %s.' % (bs, kind)
+            short = 'No route on %s for this %s' % (bs, kind)
         else:
-            what = '%s routes %s (%s) out of %s, expected %s.' % (ctx.n['B'], p, name, r['b_route'], ifc)
-            why = 'Traffic for %s may take the wrong path through %s.' % (name, ctx.n['B_short'])
+            what = '%s: %s routes it out of %s, expected %s.' % (t, ctx.n['B'], r['b_route'], ifc)
+            why = 'Traffic for this %s may take the wrong path through %s.' % (kind, bs)
+            short = '%s routes it out of a different interface than %s' % (bs, ctx.n['A_short'])
         hit = next((e for e in route_table(ctx.B) if IPSet.parse(p).issubset(e['set'])), None)
         conn = ctx.B.interfaces.get(ifc)
         on_ifc = bool(conn and conn.ip) and IPSet.parse(p).issubset(IPSet.net(conn.ip, conn.mask))
         a_vlan = any(e['net'] == p and e['kind'] == 'connected' for e in route_table(ctx.A))
         re_ip = a_vlan and conn is not None and bool(conn.ip) and not on_ifc
         if hit is not None and hit['plen'] > 0:
-            what = '%s routes %s (%s) via %s (%s), not %s.' % (ctx.n['B'], p, name, hit['ifc'], hit['net'], ifc)
-            why = 'Traffic for %s follows that route, not the interface A uses.' % name
+            what = '%s: %s routes it via %s (%s), not %s.' % (t, ctx.n['B'], hit['ifc'], hit['net'], ifc)
+            why = 'Traffic for this %s follows that route, not the interface %s uses.' % (kind, ctx.n['A_short'])
+            short = '%s routes it via %s (%s), not %s' % (bs, hit['ifc'], hit['net'], ifc)
         if re_ip:
-            what += ' %s on %s is %s, a different subnet.' % (ifc, ctx.n['B_short'], ipaddress.IPv4Interface(
+            what += ' %s on %s is %s, a different subnet.' % (ifc, bs, ipaddress.IPv4Interface(
                 '%s/%s' % (conn.ip, conn.mask)).network)
-            why += ' A static route is not the fix: decide whether this subnet moves to %s or each site keeps its own.' % ctx.n['B_short']
-        if ctx.B.dynamic_routing:
-            why += ' %s also runs %s, so the path may be learned.' % (ctx.n['B_short'], ', '.join(ctx.B.dynamic_routing))
+            why += ' A static route is not the fix: decide whether this subnet moves to %s or each site keeps its own.' % bs
+            short = '%s on %s is a different subnet: decide whether this %s moves' % (ifc, bs, kind)
+        check = bool(ctx.B.dynamic_routing) and not re_ip
+        if check:
+            what = '%s: the %s config has no static route for this %s to %s. %s runs %s, so the route may be learned.' % (
+                t, bs, kind, ifc, bs, ', '.join(ctx.B.dynamic_routing))
+            why = 'If %s has not learned it, return traffic for this %s follows another route and sessions fail.' % (bs, kind)
+            short = 'No static route on %s; %s may learn it by %s. Run show route on %s' % (
+                bs, bs, ', '.join(x.split()[1] if len(x.split()) > 1 else x for x in ctx.B.dynamic_routing).upper(), bs)
         evid = []
         rest = IPSet.parse(p)
         for e in route_table(ctx.B):
@@ -423,15 +514,25 @@ def routing_findings(ctx):
                 break
         oname = safe('NET_%s' % p.replace('/', '_'))
         ob = obj_line(oname, IPSet.parse(p))
-        fmc = ['Devices > Device Management > %s > Routing > Static Route > Add Route: Interface %s, Available Network %s, '
-               'Gateway %s, Metric 1.' % (ctx.n['B_short'], ifc, oname, nh)]
+        ip = sample(IPSet.parse(p))
+        add = ('Devices > Device Management > %s > Routing > Static Route > Add Route: Interface %s, Available Network %s, '
+               'Gateway %s, Metric 1.' % (bs, ifc, oname, nh))
+        fmc = [add]
         cli = ['route %s %s %s %s 1' % (ifc, net.network_address, net.netmask, nh)]
+        level = 'fix'
+        if check:
+            fmc = ['First, on %s run: show route %s. If it points to %s, no change is needed. If it points elsewhere, '
+                   'add this route: %s' % (bs, ip, ifc, add)]
+            cli = ['show route %s' % ip] + cli
+            level = 'check'
         if re_ip:
-            fmc = ['No route to add. Re-address %s on %s only if the subnet really moves there.' % (ifc, ctx.n['B_short'])]
-            cli, ob = ['! no route change: subnet design decision'], None
-        verify = ['show route %s' % sample(IPSet.parse(p))]
+            fmc = ['No route to add. Re-address %s on %s only if the subnet really moves there: Devices > Device '
+                   'Management > %s > Interfaces > edit %s > IPv4.' % (ifc, bs, bs, ifc)]
+            cli, ob, level = ['show route %s' % ip, 'show interface %s' % ifc], None, 'choice'
+        verify = ['show route %s' % ip]
         out.append(_f(ctx, 'routing', _key('routing', p), [p], what, why, evid, fmc, cli, [ob] if ob else [], verify,
-                      {'status': r['status'], 'plain_status': plain(r['status'], ctx.n), 'fmc_group': 'Routing'}))
+                      {'status': r['status'], 'plain_status': plain(r['status'], ctx.n), 'fmc_group': 'Routing',
+                       'level': level, 'short': short, 'subject': p}))
     return out
 
 
@@ -492,9 +593,9 @@ def pat_findings(ctx):
                     t.split(': ', 1)[1].split(' (')[0]) for n, t in shadowed[:3])
         else:
             a_txt = '%s does not translate it either.' % ctx.n['A_short']
-        what = '%s has no outbound PAT for %s (%s). %s' % (ctx.n['B'], ', '.join(srcs), name, a_txt)
-        why = 'Hosts in %s cannot reach the internet through %s.' % (name if cov == s or not hit else ', '.join(srcs),
-                                                                     ctx.n['B_short'])
+        what = '%s: %s has no outbound PAT for it (source %s). %s' % (ctx.title(p), ctx.n['B'], ', '.join(srcs), a_txt)
+        why = 'Hosts in this %s cannot reach the internet through %s.' % (
+            ctx.kind(p) if cov == s or not hit else 'part of the %s (%s)' % (ctx.kind(p), repr(cov)), ctx.n['B_short'])
         evid = [ev(ctx.dev(getattr(n, 'device', '')), n) for n in (dyn or [x for _, x in hit])[:4]]
         for n, txt in shadowed[:3]:
             e = ev(ctx.dev(getattr(n, 'device', '')), n)
@@ -518,6 +619,7 @@ def pat_findings(ctx):
         verify = ['packet-tracer input %s tcp %s 40000 8.8.8.8 443' % (b_in, h), 'show xlate local %s' % h]
         out.append(_f(ctx, 'pat', key, [p], what, why, evid, fmc, cli, objects, verify,
                       {'status': b['status'], 'plain_status': 'no outbound PAT on %s' % ctx.n['B_short'], 'fmc_group': 'NAT',
+                       'short': 'No outbound PAT on %s; hosts cannot reach the internet' % ctx.n['B_short'], 'subject': p,
                        'pat_sources': srcs, 'pat_mode': mode, 'pat_dedicated': dedicated,
                        'pat_pool': len(dedicated) if mode == 'match' else 0}))
     return out
@@ -542,7 +644,7 @@ def inbound_findings(ctx):
                 '%s has %s; the access rule is in place.' % (ctx.n['B_short'], nat_txt))
         if nat_st in ('match', 'mapped reuse', 'mapped outside B public'):
             tail = '%s has the NAT but %s.' % (ctx.n['B_short'], rule_txt)
-        what = '%s (%s) is published at %s on %s %s. %s' % (host, real, ctx.n['A_short'], i['a_public'] or '?', ports, tail)
+        what = '%s (%s) is published at %s on %s %s. %s' % (real, host, ctx.n['A_short'], i['a_public'] or '?', ports, tail)
         why = 'During %s %s internet outage this server is unreachable from the internet.' % (
             'an' if ctx.n['A_short'][:1].lower() in 'aeiou' else 'a', ctx.n['A_short'])
         evid = [ev(ctx.dev(getattr(n, 'device', '')), n)]
@@ -567,7 +669,7 @@ def inbound_findings(ctx):
         elif nat_st == 'missing':
             pre.append('Devices > NAT > %s > Add Rule: NAT Rule Manual, Type Static, Insert In Category Before Auto NAT; '
                        'Interface Objects: Source %s, Destination %s; Translation: Original Source %s, Translated Source %s.'
-                       % (ctx.natp, ctx.b_in, ctx.b_out, real_obj, pub_obj if b_pub else '<choose a public IP: see Decisions>'))
+                       % (ctx.natp, ctx.b_in, ctx.b_out, real_obj, pub_obj if b_pub else '<choose a public IP: see Your choices>'))
             cli.append('nat (%s,%s) source static %s %s' % (ctx.b_in, ctx.b_out, real_obj, pub_obj))
         specs = []
         if rule_st != 'covered':
@@ -588,7 +690,7 @@ def inbound_findings(ctx):
         post = []
         if dns:
             post.append('DNS: failover record for %s: %s -> %s (lower the TTL first).' % (
-                host, i['a_public'], b_pub or 'pending public IP (see Decisions)'))
+                host, i['a_public'], b_pub or 'pending public IP (see Your choices)'))
         verify = [tracer(ctx.b_out, i.get('_svc'), '8.8.8.8', b_pub or '<B public>'),
                   'show xlate global %s' % (b_pub or '<B public>'), 'show nat detail | include %s' % real_obj]
         dec = 'test' if TEST_NAME.search(host) or TEST_NAME.search(i['object'] or '') else ''
@@ -598,6 +700,8 @@ def inbound_findings(ctx):
                                'a_public': i['a_public'], 'b_public': b_pub, 'ports': ports, 'dns_change': dns,
                                'suggest': 'not needed: test/dev server' if dec else '', 'nat_status': nat_st,
                                'rule_status': rule_st, 'acp_rules': specs, '_fmc_pre': pre, '_fmc_post': post,
+                               'short': 'Published server %s (%s): %s has %s and %s' % (real, host, ctx.n['B_short'], nat_txt, rule_txt),
+                               'subject': real,
                                'folded_rules': specs}))
     return out
 
@@ -629,10 +733,13 @@ def rule_findings(ctx):
             return ', '.join(v[:3]) + (' (+%d more)' % (len(v) - 3) if len(v) > 3 else '') if v else 'any'
         src_t, dst_t, svc_t = few(r['src'] for r in rows), few(r['dst'] for r in rows), few(r['service'] for r in rows)
         tag = getattr(first, 'origin', 'A').split('#')[0] if rows[0].get('path') else ''
-        what = '%s rule "%s" (%d line%s) allows %s -> %s (%s); %s %s.' % (
-            ctx.dev(tag), name, len(rows), '' if len(rows) == 1 else 's', src_t, dst_t, svc_t, ctx.n['B_short'],
-            {'missing': 'has no matching permit', 'partial': 'permits only part of it',
-             'shadowed': 'blocks it with an earlier rule (%s)' % rows[0].get('detail', ''), 'denied': 'denies it'}.get(st, st))
+        scopes = sorted({p for r in rows for p in r.get('scopes', [])})
+        verb = {'missing': 'has no matching permit', 'partial': 'allows only part of it',
+                'shadowed': 'blocks it with an earlier rule (%s)' % named(rows[0].get('detail', ''), ctx.n),
+                'denied': 'denies it'}.get(st, st)
+        what = '%s%s rule "%s" (%d line%s) allows %s -> %s (%s); %s %s.' % (
+            subnets(ctx, scopes), ctx.dev(tag), name, len(rows), '' if len(rows) == 1 else 's', src_t, dst_t, svc_t,
+            ctx.n['B_short'], verb)
         why = 'When %s takes over, this traffic is dropped%s.' % (ctx.n['B_short'], ' in part' if st == 'partial' else '')
         evid = []
         for x in rules[:4]:
@@ -650,10 +757,11 @@ def rule_findings(ctx):
             flags.append('L7 rule: confirm in FMC that it is an Allow rule')
         if VERIFY_NAME.search(name or ''):
             flags.append('rule name says [0 hits] / [VERIFY]')
-        scopes = sorted({p for r in rows for p in r.get('scopes', [])})
         scopes_any = sorted({p for r in rows for p in r.get('scopes_any', [])})
         out.append(_f(ctx, 'rules', _key('rulename', name), scopes, what, why, evid, [], [], [], verify,
                       {'status': st, 'plain_status': plain(st, ctx.n), 'fmc_group': 'Access Control',
+                       'short': 'Rule "%s": %s %s' % (name, ctx.n['B_short'], verb),
+                       'subject': ', '.join((scopes or scopes_any)[:3]) or 'rule "%s"' % name,
                        'scopes_any': scopes_any, 'flags': flags, 'rule': name, 'lines': len(rows),
                        'acp_rules': [spec['name']], '_fmc_pre': [], '_fmc_post': []}))
     ctx.folded_rules = folded
@@ -664,17 +772,21 @@ def rule_findings(ctx):
         bgroups.setdefault(r['rule'] or r['id'], []).append(r)
     for name, rows in bgroups.items():
         r = rows[0]
-        what = '%s rule "%s" (%d line%s) allows %s -> %s (%s), which %s does not allow%s.' % (
-            ctx.n['B_short'], name, len(rows), '' if len(rows) == 1 else 's', r['src'], r['dst'], r['service'],
-            ctx.n['A_short'], ' in full' if all(x['status'].endswith('(partial)') for x in rows) else '')
+        bsc = sorted({p for x in rows for p in x.get('scopes', [])})
+        what = '%s%s rule "%s" (%d line%s) allows %s -> %s (%s), which %s does not allow%s.' % (
+            subnets(ctx, bsc), ctx.n['B_short'], name, len(rows), '' if len(rows) == 1 else 's', r['src'], r['dst'],
+            r['service'], ctx.n['A_short'], ' in full' if all(x['status'].endswith('(partial)') for x in rows) else '')
         why = '%s would expose more than %s does today.' % (ctx.n['B_short'], ctx.n['A_short'])
         fmc = ['Policies > Access Control > %s > rule "%s": narrow Source/Destination/Ports to what %s allows, or disable it.'
                % (ctx.acp, name, ctx.n['A_short'])]
         out.append(_f(ctx, 'rules', _key('brulename', name), sorted({p for x in rows for p in x.get('scopes', [])}), what, why,
                       [ev(ctx.n['B'], x.get('_rule')) for x in rows[:4] if x.get('_rule') is not None], fmc,
+                      ['show access-list CSM_FW_ACL_ | include %s' % (r['rule_id'] or name)] +
                       ['(review) ' + x['line'] for x in rows[:4]], [],
                       ['show access-list CSM_FW_ACL_ | include %s' % (r['rule_id'] or name)],
                       {'status': r['status'], 'plain_status': plain(r['status'], ctx.n), 'fmc_group': 'Access Control',
+                       'level': 'review', 'short': '%s allows more than %s in rule "%s"' % (ctx.n['B_short'], ctx.n['A_short'], name),
+                       'subject': ', '.join(bsc[:3]) or 'rule "%s"' % name,
                        'scopes_any': sorted({p for x in rows for p in x.get('scopes_any', [])}), 'flags': [], 'rule': name,
                        'lines': len(rows)}))
     return out
@@ -703,21 +815,58 @@ def finalize(ctx, findings):
         f['acp_specs'] = [{k: v for k, v in ctx.specs[nm].items() if k != 'svc'} for nm in f['acp_rules']]
 
 
+def subnets(ctx, scopes):
+    """'192.0.2.0/24, 198.51.100.0/24: ' so a finding leads with the networks it is about"""
+    if not scopes:
+        return ''
+    return '%s%s: ' % (', '.join(scopes[:3]), ' (+%d more)' % (len(scopes) - 3) if len(scopes) > 3 else '')
+
+
 def object_findings(ctx):
+    """only A addresses missing from the B object are a thing to fix; a B object with every A address plus more is
+    a low-priority note (rules that use it on B allow a little more)"""
     out = []
     for o in ctx.res.get('objects', []):
-        if o['status'] != 'same name, different value' or o.get('row_state'):
+        if o['status'] not in ('same name, different value', 'B has extra entries') or o.get('row_state'):
             continue
-        what = 'Object %s is %s on %s but %s on %s.' % (o['name'], o['addrs'], ctx.n['A_short'], o['b_value_or_names'],
-                                                         ctx.n['B_short'])
-        why = 'Rules that use %s on %s match different addresses than on %s.' % (o['name'], ctx.n['B_short'], ctx.n['A_short'])
+        extra = o['status'] == 'B has extra entries' or not o.get('a_missing')
+        sc = o.get('scopes', [])
+        kw = 'object-group' if o.get('kind') == 'group' else 'object'
+        if extra:
+            what = '%sObject %s on %s has every address it has on %s (%s), plus %s.' % (
+                subnets(ctx, sc), o['name'], ctx.n['B_short'], ctx.n['A_short'], o['addrs'], o.get('b_extra') or 'more')
+            why = 'Nothing is lost at takeover. Rules that use %s on %s allow a little more than on %s.' % (
+                o['name'], ctx.n['B_short'], ctx.n['A_short'])
+            fmc = ['Optional: Objects > Object Management > Network > %s: remove the extra entries if %s should match %s '
+                   'exactly.' % (o['name'], ctx.n['B_short'], ctx.n['A_short'])]
+            short = 'Object %s has extra entries on %s (low priority)' % (o['name'], ctx.n['B_short'])
+        else:
+            what = '%sObject %s is %s on %s but %s on %s: %s is missing on %s.' % (
+                subnets(ctx, sc), o['name'], o['addrs'], ctx.n['A_short'], o['b_value_or_names'], ctx.n['B_short'],
+                o.get('a_missing') or 'part of it', ctx.n['B_short'])
+            why = 'Rules that use %s on %s do not match all the addresses they match on %s.' % (
+                o['name'], ctx.n['B_short'], ctx.n['A_short'])
+            fmc = ['Objects > Object Management > Network > %s > Edit: add %s (or use a new name if the %s value is '
+                   'right).' % (o['name'], o.get('a_missing') or 'the missing addresses', ctx.n['B_short'])]
+            short = 'Object %s lacks %s on %s' % (o['name'], o.get('a_missing') or 'addresses', ctx.n['B_short'])
         obj = o.get('_obj')
-        fmc = ['Objects > Object Management > Network > %s: check which value is right; change it or use a new name.' % o['name']]
-        out.append(_f(ctx, 'objects', _key('obj', o['name']), o.get('scopes', []), what, why,
-                      [{'device': ctx.n['A'], 'line': getattr(obj, 'lineno', 0), 'text': 'object network %s' % o['name']}],
-                      fmc, [], [], ['show running-config object id %s' % o['name']],
-                      {'status': o['status'], 'plain_status': plain(o['status'], ctx.n), 'fmc_group': 'Objects'}))
+        cli = ['show running-config %s %s' % (kw, o['name'])]
+        if not extra and o.get('a_missing'):
+            cli += ['%s network %s' % (kw, o['name'])] + [
+                (' network-object %s' % cli_net(x)) if kw == 'object-group' else
+                (' %s' % cli_net(x) if cli_net(x).startswith('host') else ' subnet %s' % cli_net(x))
+                for x in o['a_missing'].split(', ')[:8] if '/' in x]
+        out.append(_f(ctx, 'objects', _key('obj', o['name']), sc, what, why,
+                      [{'device': ctx.n['A'], 'line': getattr(obj, 'lineno', 0), 'text': '%s network %s' % (kw, o['name'])}],
+                      fmc, cli, [], ['show running-config %s %s' % (kw, o['name'])],
+                      {'status': o['status'], 'plain_status': plain(o['status'], ctx.n), 'fmc_group': 'Objects',
+                       'level': 'review' if extra else 'fix', 'short': short, 'subject': ', '.join(sc[:3]) or o['name']}))
     return out
+
+
+def cli_net(cidr):
+    n = ipaddress.IPv4Network(cidr, strict=False)
+    return 'host %s' % n.network_address if n.prefixlen == 32 else '%s %s' % (n.network_address, n.netmask)
 
 
 def public_need(ctx, findings, states=('open', 'fix', 'later')):
@@ -760,11 +909,11 @@ def decisions(ctx, findings):
         if f['category'] == 'pat' and f.get('pat_dedicated'):
             out.append({'id': 'D-pat-' + f['key'], 'kind': 'PAT address', 'title': '%s outbound PAT' % f['scope'],
                         'text': '%s PATs %s to dedicated address%s %s. Default on %s: its %s interface (like its existing '
-                                'PAT). Choose "match A\'s address" only if partners allow-list that address (costs %d public IP%s).' % (
+                                'PAT). Choose "match %s\'s address" only if partners allow-list that address (costs %d public IP%s).' % (
                                     ctx.n['A_short'], ', '.join(f['pat_sources']), 'es' if len(f['pat_dedicated']) > 1 else '',
-                                    ', '.join(f['pat_dedicated']), ctx.n['B_short'], ctx.b_out, len(f['pat_dedicated']),
-                                    '' if len(f['pat_dedicated']) == 1 else 's'),
-                        'options': ['%s interface (default)' % ctx.n['B_short'], "match A's address"], 'scopes': f['scopes'],
+                                    ', '.join(f['pat_dedicated']), ctx.n['B_short'], ctx.b_out, ctx.n['A_short'],
+                                    len(f['pat_dedicated']), '' if len(f['pat_dedicated']) == 1 else 's'),
+                        'options': ['%s interface (default)' % ctx.n['B_short'], "match %s's address" % ctx.n['A_short']], 'scopes': f['scopes'],
                         'finding': f['key'], 'blocking': False, 'default': '%s interface (default)' % ctx.n['B_short']})
     if pub:
         p = pub[0]
@@ -773,9 +922,9 @@ def decisions(ctx, findings):
         tot = {k: sum(v[k] for v in need.values()) for k in ('a', 'b', 'b_total', 'c', 'total')}
         math = ['(a) published servers with no %s NAT: %s = %d' % (ctx.n['B_short'], ', '.join(
                     '%s %d' % (ctx.label(q), need[q]['a']) for q in ctx.prof.scope), tot['a']),
-                '(b) outbound identities kept: %d of %d addresses (%d static NATs; decision per VLAN)' % (
+                '(b) outbound identities kept: %d of %d addresses (%d static NATs; your choice per network)' % (
                     tot['b'], tot['b_total'], sum(v['b_nats'] for v in need.values())),
-                "(c) PAT addresses (only with \"match A's address\"): %d" % tot['c'],
+                "(c) PAT addresses (only with \"match %s's address\"): %d" % (ctx.n['A_short'], tot['c']),
                 'needed = %d; free in %s: %s%s' % (tot['total'], ', '.join(ctx.prof.public_b) or '-', avail,
                                                      ('; short by %d' % (tot['total'] - avail)) if isinstance(avail, int)
                                                      and tot['total'] > avail else '')]
@@ -855,36 +1004,71 @@ def decisions(ctx, findings):
     return out
 
 
+CARD_ORDER = {'not ready': 0, 'check': 1, 'ready': 2, 'own': 3}
+LINE_LABEL = {'Ready': 'Ready', 'Action needed': 'Not ready', 'Decision needed': 'Your choice needed',
+              'Check first': 'Check on firewall'}
+
+
 def readiness(ctx, findings, decs):
+    """one card per scope subnet: 'Not ready: 1 thing to fix', 'Check on firewall: 1 thing to verify', 'Ready', or
+    B's own network; not-ready cards first. Counts: level fix = thing to fix, check = to verify on the firewall,
+    choice + open decisions = your choice needed; review-level notes are not counted"""
     cards = []
     need = public_need(ctx, findings)
+    bs = ctx.n['B_short']
     for p in ctx.prof.scope:
-        live = [f for f in findings if p in f['scopes'] and f['state'] != 'not needed']
+        live = [f for f in findings if p in f['scopes'] and f['state'] != 'not needed' and f['level'] != 'review']
         dd = [d for d in decs if d['open'] and p in d.get('scopes', [])]
 
-        def line(name, acts, decn=0, note=''):
-            return {'name': name, 'actions': acts, 'decisions': decn,
-                    'state': 'Decision needed' if decn else ('Action needed' if acts else 'Ready'), 'note': note}
+        def line(name, fs, decn=0, note=''):
+            acts = sum(f['level'] == 'fix' for f in fs)
+            chk = sum(f['level'] == 'check' for f in fs)
+            decn += sum(f['level'] == 'choice' for f in fs)
+            st = 'Decision needed' if decn else 'Action needed' if acts else 'Check first' if chk else 'Ready'
+            return {'name': name, 'actions': acts, 'decisions': decn, 'checks': chk, 'state': st,
+                    'label': LINE_LABEL[st], 'note': note}
         nd = need[p]
+        cat = lambda *c: [f for f in live if f['category'] in c]
         lines = [
-            line('Routing', sum(f['category'] == 'routing' for f in live)),
-            line('Outbound internet (PAT)', sum(f['category'] == 'pat' for f in live)),
-            line('Published servers (inbound)', sum(f['category'] == 'inbound' for f in live),
+            line('Routing', cat('routing')),
+            line('Outbound internet (PAT)', cat('pat')),
+            line('Published servers (inbound)', cat('inbound'),
                  sum(d['kind'] in ('test server', 'public IP conflict') for d in dd)),
-            line('Access rules', sum(f['category'] in ('rules', 'objects') for f in live),
-                 sum(d['kind'] in ('L7 action', 'rule to verify') for d in dd)),
-            line('DNS changes', sum(bool(f.get('dns_change')) for f in live)),
-            line('Public IPs', 0, sum(d['kind'] in ('public pool', 'outbound identity') for d in dd),
+            line('Access rules', cat('rules', 'objects'), sum(d['kind'] in ('L7 action', 'rule to verify') for d in dd)),
+            line('DNS changes', [f for f in live if f.get('dns_change')]),
+            line('Public IPs', [], sum(d['kind'] in ('public pool', 'outbound identity') for d in dd),
                  '%d new needed: (a) %d published servers, (b) %d outbound identity (%d NAT%s, %d address%s, %s), (c) %d PAT' % (
                      nd['total'], nd['a'], nd['b'], nd['b_nats'], '' if nd['b_nats'] == 1 else 's', nd['b_total'],
                      '' if nd['b_total'] == 1 else 'es', 'kept' if nd['b_kept'] else 'not kept', nd['c'])),
         ]
-        acts = sum(l['actions'] for l in lines)
+        acts = sum(l['actions'] for l in lines if l['name'] != 'DNS changes')
         decn = sum(l['decisions'] for l in lines)
-        cards.append({'subnet': p, 'scope': ctx.label(p), 'lines': lines, 'actions': acts, 'decisions': decn,
-                      'ready': not acts and not decn,
-                      'verdict': '%s can take over %s: %s - %d actions, %d decisions' % (
-                          ctx.n['B_short'], ctx.label(p), 'yes' if not acts and not decn else 'no', acts, decn)})
+        chk = sum(l['checks'] for l in lines if l['name'] != 'DNS changes')
+        own = ctx.owned(p)
+        t = ctx.title(p)
+        first = lambda lv: next((f['short'] for f in live if f['level'] == lv), '')
+        if own:
+            state, text = 'own', "%s - %s's own network, not part of takeover" % (t, bs)
+            reason = 'It is %s on %s, so nothing has to move from %s.' % (
+                {'VPN pool': 'a VPN pool', 'public range': "in %s's public range" % bs}.get(own, 'the %s' % own), bs,
+                ctx.n['A_short'])
+            acts = decn = chk = 0
+        elif acts or decn:
+            parts = [x for x in (acts and many(acts, 'thing to fix', 'things to fix'),
+                                 decn and many(decn, 'choice needed', 'choices needed'),
+                                 chk and many(chk, 'thing to verify', 'things to verify')) if x]
+            state, text = 'not ready', '%s - Not ready: %s' % (t, ', '.join(parts))
+            reason = first('fix') or first('choice') or next((d['title'] for d in dd), '')
+        elif chk:
+            state, text = 'check', '%s - Check on firewall: %s' % (t, many(chk, 'thing to verify', 'things to verify'))
+            reason = first('check')
+        else:
+            state, text, reason = 'ready', '%s - Ready' % t, 'Nothing in the configs stops %s from carrying this %s.' % (
+                bs, ctx.kind(p))
+        cards.append({'subnet': p, 'scope': ctx.label(p), 'title': t, 'name': ctx.name(p), 'lines': lines,
+                      'actions': acts, 'decisions': decn, 'checks': chk, 'state': state, 'own': own,
+                      'ready': state in ('ready', 'own'), 'verdict': text, 'reason': reason})
+    cards.sort(key=lambda c: CARD_ORDER[c['state']])
     return cards
 
 
@@ -920,7 +1104,7 @@ def plan(ctx, findings):
         other = [x for x in fmc if x not in nat and x not in acp and x not in dns]
         if f['category'] == 'inbound' and f.get('dns_change'):
             groups['DNS'].append({'finding': f['what'], 'fmc': 'DNS: %s: %s -> %s (lower the TTL first).' % (
-                f['host'], f['a_public'], f['b_public'] or 'pending public IP (see Decisions)'), 'cli': [],
+                f['host'], f['a_public'], f['b_public'] or 'pending public IP (see Your choices)'), 'cli': [],
                 'verify': ['nslookup %s 8.8.8.8' % f.get('host', '')]})
         if nat:
             groups['NAT'].append({'finding': f['what'], 'fmc': ' '.join(nat), 'cli': [c for c in f['fix']['cli'] if c.startswith('nat ')],
@@ -961,6 +1145,11 @@ def build(res, prof, A, B, info):
                 continue
             keep.append(o)
         f['fix']['objects'] = keep
+    for f in fs:
+        if f['scopes'] and all(ctx.owned(p) for p in f['scopes']):
+            f['level'], f['b_own'] = 'review', True
+            f['why'] += " %s is %s's own network, not part of takeover." % (
+                ', '.join(f['scopes'][:3]), ctx.n['B_short'])
     fs.sort(key=lambda f: (f['order'], f['scope'], f['what']))
     for i, f in enumerate(fs, 1):
         f['n'] = i
@@ -968,6 +1157,10 @@ def build(res, prof, A, B, info):
     res['names'] = ctx.n
     res['folded_rules'] = getattr(ctx, 'folded_rules', [])
     res['glossary'] = {k: plain(k, ctx.n) for k in GLOSSARY}
+    res['labels'] = {k: label(k, ctx.n) for k in set(LABELS) | set(GLOSSARY) | {
+        'missing on B', 'B only', 'also on A', 'inactive on B', 'mapped outside B public', 'no route on B'}}
+    res['how_to_read'] = [{'term': t, 'meaning': m.format(A=ctx.n['A_short'], B=ctx.n['B_short'])} for t, m in HOW_TO_READ]
+    res['b_owned'] = dict(ctx.owned_map)
     res['findings'] = fs
     res['decisions'] = decs
     res['readiness'] = readiness(ctx, fs, decs)

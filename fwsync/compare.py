@@ -698,12 +698,15 @@ def compare_routing(A, B, prof):
         own = next((n for n, i in B.interfaces.items() if i.ip and s.issubset(IPSet.net(i.ip, i.mask)) and
                     ra.get(a_ifc, ('',))[0] == 'inside' and rb.get(n, ('',))[0] == 'outside'), None)
         pool = any(s.overlaps(x) for x in getattr(B, 'pools', []))
-        if own or pool:
-            worst, desc = 'ok', ['belongs to B itself (%s)' % (own or 'VPN pool')]
+        pub_b, pub_a = IPSet.parse(','.join(prof.public_b)), IPSet.parse(','.join(prof.public_a))
+        public = prof.public_b and s.issubset(pub_b) and not s.overlaps(pub_a)
+        b_own = ('%s subnet' % own) if own else 'VPN pool' if pool else 'public range' if public else ''
+        if b_own:
+            worst, desc = 'ok', ['belongs to B itself (%s)' % b_own]
         nh = [r for r in _routes_for(B, s)]
         out.append({'id': 'RT-%s' % p, 'scope': prof.scope_names.get(p, p), 'scopes': [p], 'subnet': p,
                     'a_ifc': a_ifc, 'a_role': want_role, 'expected_b_ifc': want, 'b_route': '; '.join(desc),
-                    'b_next_hop': ', '.join(nh), 'status': worst,
+                    'b_next_hop': ', '.join(nh), 'status': worst, 'b_own': b_own,
                     'detail': ('B also runs %s: routes may be learned dynamically' % ', '.join(B.dynamic_routing))
                     if B.dynamic_routing and worst != 'ok' else ''})
     return out
@@ -741,14 +744,18 @@ def compare_objects(A, B, prof):
         if b is not None:
             bv = b.addrs if b.kind != 'group' else _group_addrs(B, b)
             same = bv == addrs or bv == getattr(o, 'raw_addrs', None)         # B may name A's own address on purpose
-            st = 'same' if same else 'same name, different value'
+            superset = o.kind == 'group' and b.kind == 'group' and addrs.issubset(bv)
+            st = 'same' if same else 'B has extra entries' if superset else 'same name, different value'
             other = repr(bv) if st != 'same' else ''
+            a_missing, b_extra = ('' if same else repr(addrs - bv)), ('' if same else repr(bv - addrs))
         else:
             names = by_val.get(addrs, []) if o.kind != 'group' else []
             st = 'same value, different name' if names else 'missing on B'
             other = ', '.join(names[:5])
+            a_missing = b_extra = ''
         out.append({'id': 'O-' + o.name, 'name': o.name, 'b_name': bname, 'kind': o.kind, 'value': o.value or repr(addrs),
-                    'addrs': repr(addrs), 'status': st, 'b_value_or_names': other, 'scope': prof.scope_label(addrs),
+                    'addrs': repr(addrs), 'status': st, 'b_value_or_names': other, 'a_missing': a_missing,
+                    'b_extra': b_extra, 'scope': prof.scope_label(addrs),
                     'scopes': prof.scope_keys(addrs), 'description': o.description, '_obj': o})
     return out
 

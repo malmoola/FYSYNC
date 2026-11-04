@@ -95,16 +95,33 @@ Every report ends with the ranked known gaps (what fwsync does not see and how t
 
 ## Reading the results
 
-The report and the UI open on **Readiness**: one verdict per scope subnet ("B can take over VLAN 10: no - 12 actions,
-3 decisions") and a card with six lines (Routing, Outbound internet (PAT), Published servers, Access rules, DNS changes,
-Public IPs), each Ready / Action needed / Decision needed.
+The report starts with the firewall names (A = the site that fails, B = the site that takes over; both are called by
+their real names below) and a short **How to read this report** (ready, not ready, check on firewall, thing to fix,
+your choice needed, scope, translated address).
 
-**Findings** replace the raw tables as the main view, one per issue, in order of work (routing, PAT, published servers,
-rules, objects). Each has: what (one sentence, device names, plain words), why it matters, evidence (the exact config
-lines with line numbers, collapsed), fix (FMC page and fields, LINA reference CLI, objects to create first), verify
-(packet-tracer / show commands) and buttons **Fix / Not needed (reason required) / Later**, saved in the profile.
+The **Takeover** tab and the report open on a runbook, in this order: **Fix before failover**, **Do during failover**
+(for example no shutdown on interfaces that are shut on B), **Check on the firewall** (for example a route B may learn
+by OSPF: run the given `show route` first), **Review later** (B allows more than A, objects with extra entries on B,
+networks that belong to B itself) and **Can't be proven from this config**. The verdict sentence counts each group.
 
-**Decisions** lists what the tool cannot decide: the target public IP pool (size, used, needed; enter an extra pool),
+**Readiness** shows one line per network, not-ready first, then check-first, then ready:
+`192.0.2.0/24 (VLAN 20 dmz) - Not ready: 1 thing to fix`, `... - Check on firewall: 1 thing to verify`, `... - Ready`,
+or `... - <B>'s own network, not part of takeover` (B's own public subnet or VPN pool, left out of the counts), each with
+a one-line reason. The card per network (Routing, Outbound internet (PAT), Published servers, Access rules, DNS changes,
+Public IPs) is collapsed below.
+
+**Findings**, one per issue, in order of work (routing, PAT, published servers, rules, objects). Each one leads with its
+subnet and has the same four parts: **What's wrong**, **Why it matters**, **What to do** (FMC path and fields, LINA
+reference CLI, objects to create first) and **How to verify** (packet-tracer / show commands), plus the evidence (the
+exact config lines with line numbers, collapsed) and buttons **Fix / Not needed (reason required) / Later**, saved in
+the profile.
+
+Status words in the report are plain: "B allows more than A", "uses a different path than A", "same on both", "only
+partly allowed", "blocked by an earlier rule", "your choice needed". JSON and CSV keep the internal values
+(`over-permitted`, `wrong way`, `covered`, `partial`, `shadowed`). Long raw tables (settings, every object, coverage)
+are collapsed under Details.
+
+**Your choices** lists what the tool cannot decide: the target public IP pool (size, used, needed; enter an extra pool),
 L7 rules whose action is unknown (block / permit), test / QA / dev servers (suggested Not needed), rules named
 `[0 hits]` / `[VERIFY]`, public IP conflicts (one public IP mapped to two inside hosts, or a proposed IP that is a gap
 inside a used block and may belong to a device not in the config).

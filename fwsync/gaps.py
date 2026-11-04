@@ -36,8 +36,9 @@ GAPS = [
     (11, 'lina', 'FTD LINA rules with L7 conditions show "action unknown (L7)"',
      'In a LINA backup the real action of such a rule is only in FMC.', 'Use an FMC snapshot of the same device.'),
     (12, 'all', 'Dynamic routing is listed, not evaluated',
-     'BGP/OSPF learned routes are not part of routing readiness (only connected and static).',
-     'Add what-if routes (--whatif-route) for prefixes learned by BGP.'),
+     'BGP/OSPF learned routes are not part of routing readiness (only connected and static). When B runs OSPF or '
+     'BGP, a missing static route is a "Check on the firewall" item, not a thing to fix.',
+     'Run the show route command each check item gives, or add what-if routes (--whatif-route) for learned prefixes.'),
 ]
 
 

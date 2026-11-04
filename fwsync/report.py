@@ -15,7 +15,7 @@ SECTIONS = [('rules', 'Access rules A -> B', ['id', 'path', 'scope', 'status', '
             ('coverage', 'Coverage: where every config line was compared', ['category', 'a_lines', 'b_lines', 'how', 'differences', 'impact', 'why']),
             ('held_rules', 'Rules held out of the compare (L7 action unknown by name, or marked block)',
              ['id', 'path', 'scope', 'status', 'rule', 'src_ifc', 'dst_ifc', 'src', 'dst', 'service', 'detail']),
-            ('b_rules', 'Access rules B -> A (over-permitted = B allows more than A)',
+            ('b_rules', 'Access rules B -> A (where B allows more than A)',
              ['id', 'scope', 'status', 'policy', 'rule', 'src_ifc', 'dst_ifc', 'src', 'dst', 'service', 'a_rules']),
             ('nat', 'NAT A -> B', ['id', 'scope', 'status', 'section', 'kind', 'a_ifc', 'real_ref', 'real', 'a_mapped', 'a_dst',
                                    'a_inactive', 'b_nat', 'b_mapped', 'proposed_b_mapped', 'description', 'detail']),
@@ -67,20 +67,38 @@ def write_csv(res, outdir, prefix):
     return paths
 
 
-CSS = """body{font:13px system-ui,sans-serif;margin:16px;color:#1d2330;background:#fff}
+CSS = """body{font:13px system-ui,sans-serif;margin:16px;color:#1d2330;background:#fff;max-width:1400px}
 .verdict{font-size:15px;font-weight:600;margin:4px 0}.verdict.ok{color:#17663a}.verdict.no{color:#a3141f}
-.cards{display:flex;flex-wrap:wrap;gap:12px}.card{border:1px solid #d6dae2;border-radius:6px;padding:8px 12px;min-width:300px}
-.card table td{border:none;padding:2px 8px 2px 0}.st.ok{color:#17663a}.st.act{color:#8a5a00;font-weight:600}.st.dec{color:#a3141f;font-weight:600}
-.finding{border:1px solid #d6dae2;border-radius:6px;padding:6px 10px;margin:8px 0}.finding .what{font-weight:600;margin:4px 0}
-.finding .why{margin:2px 0 6px;color:#5b6474}.fnum{color:#5b6474}.cat{background:#eef1f6;padding:1px 6px;border-radius:3px}
+.cards{display:flex;flex-wrap:wrap;gap:12px}.card{border:1px solid #d6dae2;border-radius:6px;padding:8px 12px;min-width:min(300px,100%);box-sizing:border-box}
+.card table td{border:none;padding:2px 8px 2px 0}.st.ok{color:#17663a}.st.act{color:#8a5a00;font-weight:600}.st.dec{color:#a3141f;font-weight:600}.st.chk{color:#1f5fbf;font-weight:600}
+.finding,.item{border:1px solid #d6dae2;border-radius:6px;padding:6px 10px;margin:8px 0}.finding .what{font-weight:600;margin:4px 0}
+.fnum{color:#5b6474}.cat{background:#eef1f6;padding:1px 6px;border-radius:3px}.part{margin:4px 0}.part b{display:inline-block;min-width:110px}
 .state{float:right}.state.fix{color:#17663a}.state.not-needed{color:#5b6474}.state.later{color:#8a5a00}
-.ev{font-size:12px}.decision{border-left:3px solid #a3141f;padding:2px 10px;margin:8px 0}pre{background:#f6f8fa;padding:6px;white-space:pre-wrap}
-h1{font-size:20px}h2{font-size:16px;margin-top:28px}table{border-collapse:collapse;width:100%}
+.ev{font-size:12px}.decision{border-left:3px solid #a3141f;padding:2px 10px;margin:8px 0}pre{background:#f6f8fa;padding:6px;white-space:pre-wrap;overflow-x:auto}
+h1{font-size:20px}h2{font-size:16px;margin-top:28px}table{border-collapse:collapse;width:100%}.wrap{overflow-x:auto;max-width:100%}
 th,td{border:1px solid #d6dae2;padding:3px 6px;text-align:left;vertical-align:top}th{background:#eef1f6;position:sticky;top:0}
 .s-covered,.s-match,.s-same,.s-ready{color:#17663a}.s-partial{color:#8a5a00}
 .s-missing,.s-denied,.s-shadowed,.s-wrong,.s-over-permitted,.s-mapped,.s-no{color:#a3141f;font-weight:600}
 .det td,.det th{font-size:12px}.flag{color:#a3141f}.small{color:#5b6474}.counts td{border:none;padding:1px 10px 1px 0}
-input.f{width:100%;box-sizing:border-box}"""
+.map{background:#eef1f6;padding:6px 10px;border-radius:6px}.howto dt{font-weight:600}.howto dd{margin:0 0 6px 16px}
+.g-before{border-left:4px solid #a3141f}.g-during{border-left:4px solid #8a5a00}.g-check{border-left:4px solid #1f5fbf}
+.g-later,.g-unprovable{border-left:4px solid #9aa3b2}.reason{color:#5b6474;margin:2px 0 0}
+input.f{width:100%;box-sizing:border-box}
+@media (max-width:700px){body{margin:8px}.part b{display:block}}"""
+
+
+def lab(res, v):
+    """user-facing text for an internal status value"""
+    from .findings import label
+    return label(v, res.get('names') or {'A': 'A', 'B': 'B'})
+
+
+def table(head, rows, cls=''):
+    """a table that scrolls sideways on a small screen instead of widening the page"""
+    e = html.escape
+    return ('<div class=wrap><table%s><tr>%s</tr>%s</table></div>' % (
+        ' class=%s' % cls if cls else '', ''.join('<th>%s</th>' % e(h) for h in head),
+        ''.join('<tr>%s</tr>' % ''.join('<td>%s</td>' % e(str(c)) for c in r) for r in rows)))
 
 
 def write_html(res, path, title='fwsync report'):
@@ -89,29 +107,33 @@ def write_html(res, path, title='fwsync report'):
     gl = res.get('glossary', {})
     out = ['<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">'
            '<title>%s</title><style>%s</style>' % (e(title), CSS),
-           '<h1>%s</h1><p class=small>%s &rarr; %s &middot; %d scope subnets &middot; mode %s</p>' % (
-               e(title), e(n['A']), e(n['B']), len(res['scope']), e(res.get('mode', '1:1')))]
+           '<h1>%s</h1>' % e(title),
+           '<p class=map>In this report <b>A = %s</b> (%s, the site that fails) and <b>B = %s</b> (%s, the site that '
+           'takes over). Everywhere below they are called by these names. %d networks checked, mode %s.</p>' % (
+               e(n['A']), e(res['a']['name']), e(n['B']), e(res['b']['name']), len(res['scope']), e(res.get('mode', '1:1')))]
+    out += howto_html(res)
+    out += runbook_html(res)
     out += readiness_html(res)
-    out += takeover_html(res)
-    out += firewide_html(res)
     out += findings_html(res)
     out += decisions_html(res)
     out += plan_html(res)
     from . import gaps
     out.append(gaps.html(res.get('gaps_area', 'all')))
-    out.append('<details class=adv><summary><h2 style="display:inline">Details (advanced)</h2></summary>')
+    out.append('<details class=adv><summary><h2 style="display:inline">Details (advanced)</h2></summary>'
+               '<p class=small>Raw tables behind the runbook. Status values are shown in plain words; the CSV files '
+               'keep the internal values.</p>')
+    out += areas_html(res)
+    out += firewide_html(res)
     out += detected_html(res)
-    out.append('<h3>Summary per scope subnet (rules counted only where they name the subnet; *_any = via any)</h3>'
-               '<table><tr><th>scope</th><th>subnet</th>%s</tr>' % ''.join('<th>%s</th>' % e(c) for c in SUMMARY_COLS))
-    for r in res.get('summary', []):
-        if not any(r.get(c) for c in SUMMARY_COLS):
-            continue
-        out.append('<tr><td>%s</td><td>%s</td>%s</tr>' % (e(r['scope']), e(r['subnet']), ''.join(
-            '<td>%s</td>' % e(', '.join('%s %d' % x for x in sorted(r.get(c, {}).items()))) for c in SUMMARY_COLS)))
-    out.append('</table>')
+    out.append('<h3>Summary per network (rules counted only where they name the network; *_any = via any)</h3>')
+    rows = [[r['subnet'], r['scope']] + [', '.join('%s %d' % (lab(res, k), c) for k, c in sorted(r.get(col, {}).items()))
+                                         for col in SUMMARY_COLS]
+            for r in res.get('summary', []) if any(r.get(c) for c in SUMMARY_COLS)]
+    out.append(table(['subnet', 'name'] + SUMMARY_COLS, rows))
     for key, t, cols in SECTIONS:
         rows = res.get(key, [])
-        out.append('<h3>%s (%d)</h3><table data-t=%s><tr>%s</tr>' % (e(t), len(rows), key, ''.join('<th>%s</th>' % e(c) for c in cols)))
+        out.append('<details><summary>%s (%d)</summary><div class=wrap><table data-t=%s><tr>%s</tr>' % (
+            e(named_title(t, n)), len(rows), key, ''.join('<th>%s</th>' % e(c) for c in cols)))
         out.append('<tr>%s</tr>' % ''.join('<th><input class=f oninput="flt(this)"></th>' for c in cols))
         for r in rows:
             cells = []
@@ -120,39 +142,71 @@ def write_html(res, path, title='fwsync report'):
                 v = ', '.join(v) if isinstance(v, list) else str(v)
                 tip = ' title="%s"' % e(gl.get(v, '')) if c == 'status' and gl.get(v) else ''
                 cls = ' class="s-%s"' % e(v.split()[0].rstrip(',')) if c == 'status' and v else ''
-                cells.append('<td%s%s>%s</td>' % (cls, tip, e(v)))
+                cells.append('<td%s%s>%s</td>' % (cls, tip, e(lab(res, v) if c == 'status' else v)))
             out.append('<tr>%s</tr>' % ''.join(cells))
-        out.append('</table>')
+        out.append('</table></div></details>')
     out.append('</details>')
     out.append("""<script>function flt(i){const t=i.closest('table'),c=[...t.rows[1].cells].map(x=>x.firstChild.value.toLowerCase());
 for(const r of [...t.rows].slice(2)){r.style.display=c.every((v,k)=>!v||r.cells[k].textContent.toLowerCase().includes(v))?'':'none'}}</script>""")
     Path(path).write_text('\n'.join(out), encoding='utf-8')
 
 
-def takeover_html(res):
+def named_title(t, n):
+    from .findings import named
+    return named(t, n)
+
+
+def howto_html(res):
     e = html.escape
-    v = res.get('verdict')
-    if not v:
+    h = res.get('how_to_read', [])
+    if not h:
         return []
-    out = ['<h2>Takeover check</h2><p class="verdict %s">%s</p><table><tr><th>area</th><th>open</th></tr>' % (
-        'ok' if v['ready'] else 'no', e(v['text']))]
-    out += ['<tr><td>%s</td><td>%d</td></tr>' % (e(a['area']), a['open']) for a in v['areas']]
-    out.append('</table><h3>What must be true on the surviving site</h3><table><tr><th>severity</th><th>area</th><th>what</th><th>detail</th><th>action</th></tr>')
-    for t in res.get('takeover', []):
-        out.append('<tr>%s</tr>' % ''.join('<td>%s</td>' % e(t[k]) for k in ('severity', 'area', 'title', 'detail', 'action')))
-    return out + ['</table>']
+    return ['<details open><summary><b>How to read this report</b></summary><dl class=howto>%s</dl></details>' % ''.join(
+        '<dt>%s</dt><dd>%s</dd>' % (e(x['term']), e(x['meaning'])) for x in h)]
+
+
+def item_html(it):
+    """one runbook item or finding: What's wrong / Why it matters / What to do (FMC path + CLI) / How to verify"""
+    e = html.escape
+    return ('<div class=part><b>What\'s wrong</b> %s</div><div class=part><b>Why it matters</b> %s</div>'
+            '<div class=part><b>What to do</b><ol>%s</ol><pre>%s</pre></div><div class=part><b>How to verify</b>'
+            '<pre>%s</pre></div>' % (e(it['what']), e(it['why']), ''.join('<li>%s</li>' % e(x) for x in it['fmc']),
+                                     e('\n'.join(it['cli'])), e('\n'.join(it['verify']))))
+
+
+def runbook_html(res):
+    e = html.escape
+    rb, v = res.get('runbook'), res.get('verdict')
+    if not rb:
+        return []
+    out = ['<h2>Takeover runbook</h2>']
+    if v:
+        out.append('<p class="verdict %s">%s</p>' % ('ok' if v['ready'] else 'no', e(v['text'])))
+    for g in rb:
+        out.append('<h3>%s (%d)</h3>' % (e(g['title']), g['count']))
+        if not g['items']:
+            out.append('<p class=small>Nothing here.</p>')
+        for i, it in enumerate(g['items'], 1):
+            out.append('<details class="item g-%s"><summary><b>%d. %s</b> &middot; %s <span class=small>(%s)</span>'
+                       '</summary>%s</details>' % (e(g['key']), i, e(it['subject']), e(it['reason']), e(it['kind']),
+                                                   item_html(it)))
+    return out
+
+
+def areas_html(res):
+    v = res.get('verdict') or {}
+    if not v.get('areas'):
+        return []
+    return ['<h3>Open items per area</h3>', table(['area', 'open'], [[a['area'], a['open']] for a in v['areas']])]
 
 
 def firewide_html(res):
-    e = html.escape
     rows = res.get('firewide', [])
     if not rows:
         return []
-    out = ['<h2>Whole-firewall checks (%d)</h2><p class=small>Readiness above covers only the scope subnets. '
-           'These checks cover the whole firewall.</p><table><tr><th>check</th><th>item</th><th>detail</th></tr>' % len(rows)]
-    for r in rows:
-        out.append('<tr><td>%s</td><td>%s</td><td>%s</td></tr>' % (e(r['check']), e(r['item']), e(r['detail'])))
-    return out + ['</table>']
+    return ['<h3>Whole-firewall checks (%d)</h3><p class=small>Not limited to the scope; each one is also in the '
+            'runbook.</p>' % len(rows), table(['check', 'item', 'detail'], [[lab(res, r['check']), r['item'], r['detail']]
+                                                                            for r in rows])]
 
 
 def readiness_html(res):
@@ -160,50 +214,52 @@ def readiness_html(res):
     cards = res.get('readiness', [])
     if not cards:
         return []
-    out = ['<h2>Readiness</h2>']
+    out = ['<h2>Readiness per network</h2>']
     for c in cards:
-        out.append('<p class="verdict %s">%s</p>' % ('ok' if c['ready'] else 'no', e(c['verdict'])))
-    out.append('<div class=cards>')
+        out.append('<p class="verdict %s">%s</p><p class=reason>%s</p>' % (
+            'ok' if c['ready'] else 'no', e(c['verdict']), e(c.get('reason', ''))))
+    out.append('<details><summary>Per area</summary><div class=cards>')
     for c in cards:
-        out.append('<div class=card><h3>%s <span class=small>%s</span></h3><table>' % (e(c['scope']), e(c['subnet'])))
+        out.append('<div class=card><h3>%s</h3><table>' % e(c.get('title', c['subnet'])))
         for l in c['lines']:
-            cnt = ', '.join(x for x in (('%d actions' % l['actions']) if l['actions'] else '',
-                                         ('%d decisions' % l['decisions']) if l['decisions'] else '') if x)
+            cnt = ', '.join(x for x in (
+                l['actions'] and ('%d to fix' % l['actions']), l['decisions'] and (
+                    '%d choice%s needed' % (l['decisions'], '' if l['decisions'] == 1 else 's')),
+                l.get('checks') and ('%d to verify' % l['checks'])) if x)
             cnt = (' (%s)' % cnt) if cnt else ''
             out.append('<tr><td>%s</td><td class="st %s">%s%s</td><td class=small>%s</td></tr>' % (
-                e(l['name']), {'Ready': 'ok', 'Action needed': 'act', 'Decision needed': 'dec'}[l['state']],
-                e(l['state']), cnt, e(l.get('note', ''))))
+                e(l['name']), {'Ready': 'ok', 'Action needed': 'act', 'Decision needed': 'dec', 'Check first': 'chk'}[l['state']],
+                e(l.get('label', l['state'])), cnt, e(l.get('note', ''))))
         out.append('</table></div>')
-    out.append('</div>')
+    out.append('</div></details>')
     return out
 
 
 def findings_html(res):
     e = html.escape
     fs = res.get('findings', [])
-    out = ['<h2>Findings (%d)</h2><p class=small>Order of work: routing, outbound PAT, published servers, rules, objects.</p>' % len(fs)]
+    out = ['<h2>Findings (%d)</h2><p class=small>Order of work: routing, outbound PAT, published servers, rules, objects.'
+           '</p>' % len(fs)]
+    lv = {'fix': 'thing to fix', 'choice': 'your choice needed', 'check': 'check on firewall', 'review': 'review later'}
     for f in fs:
         evid = ''.join('<div class=ev><b>%s</b> line %s: <code>%s</code></div>' % (e(x['device']), x['line'] or '-', e(x['text']))
                        for x in f['evidence'])
-        fix = ''.join('<li>%s</li>' % e(x) for x in f['fix']['fmc'])
         objs = ''.join('<li><code>%s</code> = %s</li>' % (e(o['name']), e(o['value'])) for o in f['fix']['objects'])
-        cli = '\n'.join(f['fix']['cli'])
-        ver = '\n'.join(f['verify'])
+        it = {'what': f['what'], 'why': f['why'], 'fmc': f['fix']['fmc'], 'verify': f['verify'],
+              'cli': [c for o in f['fix']['objects'] for c in o['cli']] + f['fix']['cli']}
         out.append('<div class="finding st-%s" id="%s"><div class=fh><span class=fnum>#%d</span> <span class=cat>%s</span> '
-                   '<span class=small>%s</span> <span class="state %s">%s</span></div><p class=what>%s</p><p class=why>%s</p>'
-                   '<details><summary>Evidence</summary>%s</details><details><summary>Fix</summary>'
-                   '%s<ol>%s</ol><pre>%s</pre></details><details><summary>Verify</summary><pre>%s</pre></details></div>' % (
-                       e(f['state'].replace(' ', '-')), e(f['id']), f['n'], e(f['category']), e(f['scope']),
-                       e(f['state'].replace(' ', '-')), e(f['state'] + (': ' + f['reason'] if f['reason'] else '')),
-                       e(f['what']), e(f['why']), evid,
-                       ('<p>Objects to create first:</p><ul>%s</ul>' % objs) if objs else '', fix, e(cli), e(ver)))
+                   '<span class=cat>%s</span> <span class=small>%s</span> <span class="state %s">%s</span></div>%s%s'
+                   '<details><summary>Evidence</summary>%s</details></div>' % (
+                       e(f['state'].replace(' ', '-')), e(f['id']), f['n'], e(f['category']), e(lv.get(f.get('level'), '')),
+                       e(f['scope']), e(f['state'].replace(' ', '-')), e(f['state'] + (': ' + f['reason'] if f['reason'] else '')),
+                       ('<p>Objects to create first:</p><ul>%s</ul>' % objs) if objs else '', item_html(it), evid))
     return out
 
 
 def decisions_html(res):
     e = html.escape
     ds = res.get('decisions', [])
-    out = ['<h2>Decisions (%d)</h2>' % len(ds)]
+    out = ['<h2>Your choices (%d)</h2>' % len(ds)]
     for d in ds:
         out.append('<div class=decision><b>%s</b> &middot; %s<p>%s</p>%s<p class=small>Options: %s%s</p></div>' % (
             e(d['kind']), e(d['title']), e(d['text']),

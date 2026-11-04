@@ -62,7 +62,7 @@ async def api_compare(mode: str = Form('1:1'), a1: UploadFile = File(None), a2: 
 @app.post('/api/state')
 async def api_state(body: dict):
     """finding / decision states changed in the UI: rebuild findings, readiness, decisions and plan (no re-compare)"""
-    from . import findings
+    from . import findings, runbook
     s = STATE['sessions'].get(body.get('session'))
     if not s:
         raise HTTPException(404, 'session')
@@ -72,7 +72,8 @@ async def api_state(body: dict):
     if 'decision_state' in body:
         prof.decision_state = body['decision_state'] or {}
     findings.build(s['res'], prof, s['A'], s['B'], s['res']['detected'])
-    out = clean({k: s['res'][k] for k in ('findings', 'decisions', 'readiness', 'plan', 'known_gaps')})
+    runbook.build(s['res'])
+    out = clean({k: s['res'][k] for k in ('findings', 'decisions', 'readiness', 'plan', 'known_gaps', 'runbook', 'verdict')})
     return JSONResponse(json.loads(json.dumps(out, default=str)))
 
 
@@ -187,6 +188,12 @@ pre{white-space:pre-wrap;border:1px solid var(--line);padding:8px;max-height:420
 .fb{float:right}.fb button{padding:3px 9px}.ev{font-size:12px;margin:2px 0}.flag{color:var(--warn)}
 .decision{border-left:3px solid var(--bad);padding:4px 10px;margin:10px 0}.decision.done{border-color:var(--ok)}
 [title]{text-decoration-style:dotted}
+.map{background:var(--head);padding:6px 10px;border-radius:6px}.howto dt{font-weight:600}.howto dd{margin:0 0 6px 16px}
+.item{border:1px solid var(--line);border-radius:6px;padding:6px 10px;margin:6px 0}.part{margin:4px 0}.part b{display:inline-block;min-width:110px}
+.g-before{border-left:4px solid var(--bad)}.g-during{border-left:4px solid var(--warn)}.g-check{border-left:4px solid var(--acc)}
+.g-later,.g-unprovable{border-left:4px solid var(--mut)}.st-chk{color:var(--acc);font-weight:600}.reason{color:var(--mut);margin:0 0 8px}
+.card{min-width:min(320px,100%);box-sizing:border-box}
+@media (max-width:700px){body{margin:8px}.part b{display:block}.fb{float:none;display:block}}
 </style></head><body>
 <h1>fwsync</h1>
 <form id=f><fieldset><legend>Configs (show running-config text)</legend>
@@ -202,7 +209,7 @@ Profile path (JSON or YAML) <input type=text name=profile_path size=50></details
 </fieldset><button type=submit>Compare</button> <span id=busy class=mut></span></form>
 
 <nav id=nav class="tabs hide"><button data-v=takeover class=on>Takeover</button><button data-v=readiness>Readiness</button><button data-v=findings>Findings</button>
-<button data-v=decisions>Decisions</button><button data-v=plan>Remediation plan</button><button data-v=setup>Setup</button>
+<button data-v=decisions>Your choices</button><button data-v=plan>Remediation plan</button><button data-v=setup>Setup</button>
 <button data-v=details>Details (advanced)</button></nav>
 <section id=v-takeover class=view></section>
 <section id=v-readiness class="view hide"></section>
@@ -216,7 +223,7 @@ Profile path (JSON or YAML) <input type=text name=profile_path size=50></details
 <section id=v-setup class="view hide">
 <div id=det class=hide>
 <fieldset><legend>Interfaces</legend><div id=chain></div><div class=wrap><table id=imap></table></div>
-<p>B outside: <span id=broles></span></p></fieldset>
+<p><span id=boutl>B outside:</span> <span id=broles></span></p></fieldset>
 <fieldset><legend>Scope</legend>
 <p><button type=button class=sec id=sall>all</button><button type=button class=sec id=snone>none</button><button type=button class=sec id=sinv>invert</button>
 <input type=text id=sflt placeholder=filter size=18> <span id=scnt class=mut></span></p>
@@ -275,20 +282,27 @@ let VIEW='takeover';
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>show(b.dataset.v));
 function show(v){VIEW=v;document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x.dataset.v==v));
 document.querySelectorAll('.view').forEach(s=>s.classList.toggle('hide',s.id!='v-'+v))}
-function tbl(cols,rows){return '<table><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr>'+rows.map(r=>'<tr>'+cols.map(c=>`<td>${esc(String(r[c]??''))}</td>`).join('')+'</tr>').join('')+'</table>'}
-function takeoverView(){const v=R.verdict;if(!v){$('v-takeover').innerHTML='<p class=mut>Takeover check needs two LINA configs in 1:1 mode.</p>';return}
-let h=`<h2>Can B take over?</h2><p class="verdict ${v.ready?'ok':'no'}">${esc(v.text)}</p>`+tbl(['area','open'],v.areas);
-h+='<h3>What must be true on the surviving site</h3>'+tbl(['severity','area','title','detail','action'],R.takeover||[]);
-h+=`<h3>Whole-firewall checks (${(R.firewide||[]).length})</h3>`+tbl(['check','item','detail'],R.firewide||[]);
-h+='<h3>Coverage: where every config line was compared</h3>'+tbl(['category','a_lines','b_lines','how','differences','impact','why'],R.coverage||[]);
+function tbl(cols,rows){return '<div class=wrap><table><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr>'+rows.map(r=>'<tr>'+cols.map(c=>`<td>${esc(String(r[c]??''))}</td>`).join('')+'</tr>').join('')+'</table></div>'}
+const L=s=>(R&&R.labels&&R.labels[s])||s;
+function howto(){return (R.how_to_read||[]).length?'<details open><summary><b>How to read this</b></summary><dl class=howto>'+R.how_to_read.map(x=>`<dt>${esc(x.term)}</dt><dd>${esc(x.meaning)}</dd>`).join('')+'</dl></details>':''}
+function parts(it){return `<div class=part><b>What's wrong</b> ${esc(it.what)}</div><div class=part><b>Why it matters</b> ${esc(it.why)}</div>
+<div class=part><b>What to do</b><ol>${it.fmc.map(x=>`<li>${esc(x)}</li>`).join('')}</ol><pre>${esc(it.cli.join('\n'))}</pre></div><div class=part><b>How to verify</b><pre>${esc(it.verify.join('\n'))}</pre></div>`}
+function takeoverView(){const v=R.verdict,n=R.names;
+let h=`<p class=map>A = <b>${esc(n.A)}</b> (the site that fails), B = <b>${esc(n.B)}</b> (the site that takes over). Below they are called by these names.</p>`+howto();
+if(v)h+=`<h2>Can ${esc(n.B)} take over?</h2><p class="verdict ${v.ready?'ok':'no'}">${esc(v.text)}</p>`;
+h+=(R.runbook||[]).map(g=>`<h3>${esc(g.title)} (${g.count})</h3>`+(g.items.length?g.items.map((it,i)=>`<details class="item g-${g.key}"><summary><b>${i+1}. ${esc(it.subject)}</b> &middot; ${esc(it.reason)} <span class=mut>(${esc(it.kind)})</span></summary>${parts(it)}</details>`).join(''):'<p class=mut>Nothing here.</p>')).join('');
+h+='<details><summary>Details: open items per area, whole-firewall checks, coverage</summary>'+(v&&v.areas&&v.areas.length?'<h3>Open items per area</h3>'+tbl(['area','open'],v.areas):'');
+h+=`<h3>Whole-firewall checks (${(R.firewide||[]).length})</h3>`+tbl(['check','item','detail'],(R.firewide||[]).map(r=>Object.assign({},r,{check:L(r.check)})));
+h+='<h3>Coverage: where every config line was compared</h3>'+tbl(['category','a_lines','b_lines','how','differences','impact','why'],R.coverage||[])+'</details>';
 $('v-takeover').innerHTML=h}
 function renderAll(){$('nav').classList.remove('hide');takeoverView();readinessView();fillScopes();findingsView();decisionsView();planView();show(VIEW)}
-const STC={'Ready':'st-ok','Action needed':'st-act','Decision needed':'st-dec'};
+const STC={'Ready':'st-ok','Action needed':'st-act','Decision needed':'st-dec','Check first':'st-chk'};
 const CATS={'Routing':['routing'],'Outbound internet (PAT)':['pat'],'Published servers (inbound)':['inbound'],'Access rules':['rules','objects'],'DNS changes':['inbound'],'Public IPs':[]};
-function readinessView(){const n=R.names;let h=`<h2>Readiness</h2><p class=mut>${esc(n.A)} &rarr; ${esc(n.B)}</p>`+R.readiness.map(c=>`<p class="verdict ${c.ready?'ok':'no'}">${esc(c.verdict)}</p>`).join('');
-h+='<div class=cards>'+R.readiness.map(c=>`<div class=card><h3>${esc(c.scope)} <span class=mut>${esc(c.subnet)}</span></h3><table>`+c.lines.map(l=>
-`<tr class=link data-s="${esc(c.subnet)}" data-l="${esc(l.name)}"><td>${esc(l.name)}</td><td class="${STC[l.state]}">${esc(l.state)}${l.actions||l.decisions?' ('+[l.actions?l.actions+' action'+(l.actions>1?'s':''):'',l.decisions?l.decisions+' decision'+(l.decisions>1?'s':''):''].filter(x=>x).join(', ')+')':''}</td><td class=mut>${esc(l.note||'')}</td></tr>`).join('')+'</table></div>').join('')+'</div>';
-h+='<p class=mut>Click a line to open its findings (Public IPs and decisions open the Decisions tab).</p>';
+function readinessView(){const n=R.names;let h=`<h2>Readiness per network</h2><p class=mut>${esc(n.A)} &rarr; ${esc(n.B)}</p>`+R.readiness.map(c=>`<p class="verdict ${c.ready?'ok':'no'}">${esc(c.verdict)}</p><p class=reason>${esc(c.reason||'')}</p>`).join('');
+const cnt=l=>[l.actions?l.actions+' to fix':'',l.decisions?l.decisions+(l.decisions>1?' choices':' choice')+' needed':'',l.checks?l.checks+' to verify':''].filter(x=>x).join(', ');
+h+='<details><summary>Per area (click a line to open its findings)</summary><div class=cards>'+R.readiness.map(c=>`<div class=card><h3>${esc(c.title||c.subnet)}</h3><table>`+c.lines.map(l=>
+`<tr class=link data-s="${esc(c.subnet)}" data-l="${esc(l.name)}"><td>${esc(l.name)}</td><td class="${STC[l.state]}">${esc(l.label||l.state)}${cnt(l)?' ('+cnt(l)+')':''}</td><td class=mut>${esc(l.note||'')}</td></tr>`).join('')+'</table></div>').join('')+'</div></details>';
+h+='<p class=mut>Public IPs and choices open the Your choices tab.</p>';
 $('v-readiness').innerHTML=h;
 document.querySelectorAll('#v-readiness tr.link').forEach(tr=>tr.onclick=()=>{const c=CATS[tr.dataset.l]||[];
 if(!c.length||tr.querySelector('.st-dec')&&tr.dataset.l!='Access rules'&&tr.dataset.l!='Published servers (inbound)'){show('decisions');return}
@@ -301,21 +315,20 @@ return R.findings.filter(f=>(!c||f.category==c)&&(!s||f.scopes.includes(s))&&(st
 function findingsView(){const fs=shownFindings();$('fcount').textContent=fs.length+' of '+R.findings.length+' findings';
 const lim=fs.slice(0,200);$('flist').innerHTML=lim.map(f=>`<div class="finding state-${f.state.replace(' ','-')}" data-k="${f.key}">
 <span class=fb><button class=sec data-a=fix>Fix</button><button class=sec data-a="not needed">Not needed</button><button class=sec data-a=later>Later</button>${f.state!='open'?'<button class=sec data-a=open>Reset</button>':''}</span>
-<span class=mut>#${f.n}</span> <span class=cat>${esc(f.category)}</span> <span class=mut>${esc(f.scope)}</span> <b class="${f.state=='fix'?'st-ok':''}">${f.state!='open'?esc(f.state+(f.reason?': '+f.reason:'')):''}</b>
-<p class=what title="${esc(R.glossary[f.status]||f.plain_status||'')}">${esc(f.what)}</p><p class=why>${esc(f.why)}</p>
+<span class=mut>#${f.n}</span> <span class=cat>${esc(f.category)}</span> <span class=cat>${esc(LV[f.level]||'')}</span> <span class=mut>${esc(f.scope)}</span> <b class="${f.state=='fix'?'st-ok':''}">${f.state!='open'?esc(f.state+(f.reason?': '+f.reason:'')):''}</b>
 ${(f.flags||[]).map(x=>`<div class=flag>&#9888; ${esc(x)}</div>`).join('')}${f.suggest?`<div class=flag>Suggested: ${esc(f.suggest)}</div>`:''}
-<details><summary>Evidence (${f.evidence.length})</summary>${f.evidence.map(e=>`<div class=ev><b>${esc(e.device)}</b> line ${e.line||'-'}: <code>${esc(e.text)}</code></div>`).join('')}</details>
-<details><summary>Fix</summary>${f.fix.objects.length?'<p>Objects to create first:</p><ul>'+f.fix.objects.map(o=>`<li><code>${esc(o.name)}</code> = ${esc(o.value)}</li>`).join('')+'</ul>':''}
-<ol>${f.fix.fmc.map(x=>`<li>${esc(x)}</li>`).join('')}</ol><pre>${esc(f.fix.cli.join('\n'))}</pre></details>
-<details><summary>Verify</summary><pre>${esc(f.verify.join('\n'))}</pre></details></div>`).join('')+(fs.length>200?`<p class=mut>first 200 of ${fs.length}: narrow the filter</p>`:'');
+${f.fix.objects.length?'<p>Objects to create first:</p><ul>'+f.fix.objects.map(o=>`<li><code>${esc(o.name)}</code> = ${esc(o.value)}</li>`).join('')+'</ul>':''}
+${parts({what:f.what,why:f.why,fmc:f.fix.fmc,cli:f.fix.objects.flatMap(o=>o.cli).concat(f.fix.cli),verify:f.verify})}
+<details><summary>Evidence (${f.evidence.length})</summary>${f.evidence.map(e=>`<div class=ev><b>${esc(e.device)}</b> line ${e.line||'-'}: <code>${esc(e.text)}</code></div>`).join('')}</details></div>`).join('')+(fs.length>200?`<p class=mut>first 200 of ${fs.length}: narrow the filter</p>`:'');
 document.querySelectorAll('#flist .fb button').forEach(b=>b.onclick=()=>setState([b.closest('.finding').dataset.k],b.dataset.a))}
+const LV={fix:'thing to fix',choice:'your choice needed',check:'check on firewall',review:'review later'};
 async function setState(keys,a){let why='';if(a=='not needed'){why=prompt('Reason (required)');if(!why)return}
 P.finding_state=P.finding_state||{};keys.forEach(k=>{if(a=='open')delete P.finding_state[k];else P.finding_state[k]={state:a,reason:why}});await pushState()}
 $('fallfix').onclick=()=>{const fs=shownFindings();if(fs.length&&confirm('Mark '+fs.length+' shown findings as Fix?'))setState(fs.map(f=>f.key),'fix')};
 async function pushState(){const r=await fetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({session:R.session,finding_state:P.finding_state||{},decision_state:P.decision_state||{}})});
-if(!r.ok){alert(await r.text());return}Object.assign(R,await r.json());readinessView();findingsView();decisionsView();planView()}
-function decisionsView(){const ds=R.decisions;let h=`<h2>Decisions (${ds.filter(d=>d.open).length} open)</h2><p class=mut>Things the tool cannot decide. Your choice is saved in the profile.</p>`;
+if(!r.ok){alert(await r.text());return}Object.assign(R,await r.json());takeoverView();readinessView();findingsView();decisionsView();planView()}
+function decisionsView(){const ds=R.decisions;let h=`<h2>Your choices (${ds.filter(d=>d.open).length} open)</h2><p class=mut>Things the tool cannot decide. Your choice is saved in the profile.</p>`;
 h+=ds.map(d=>`<div class="decision ${d.open?'':'done'}" data-id="${esc(d.id)}"><b>${esc(d.kind)}</b> &middot; ${esc(d.title)}<p>${esc(d.text)}</p>
 ${(d.evidence||[]).map(e=>`<div class=ev><b>${esc(e.device)}</b> line ${e.line||'-'}: <code>${esc(e.text)}</code></div>`).join('')}
 ${d.math?'<ul class=math>'+d.math.map(m=>`<li>${esc(m)}</li>`).join('')+'</ul>':''}
@@ -357,7 +370,7 @@ return `<tr data-a="${esc(m.a)}"><td><input type=checkbox class=inc ${ign?'':'ch
 <td>${esc(m.how)}</td><td class=flag>${esc([m.flag,m.note].filter(x=>x).join(' '))}</td></tr>`}).join('');
 document.querySelectorAll('#imap .bif').forEach(s=>s.onchange=()=>{if(s.value=='__new'){const n=prompt('Name of the new interface on B (e.g. RESEARCH, OUTSIDE2)');
 if(n){const o=document.createElement('option');o.textContent=n;s.insertBefore(o,s.lastChild);s.value=n}else s.value=''}});
-$('broles').innerHTML=Object.keys(d.roles_b).map(k=>`<label><input type=checkbox class=bout value="${esc(k)}" ${P.outside_b.includes(k)?'checked':''}> ${esc(k)}</label>`).join(' ');
+$('boutl').textContent=R.names.B_short+' outside interfaces:';$('broles').innerHTML=Object.keys(d.roles_b).map(k=>`<label><input type=checkbox class=bout value="${esc(k)}" ${P.outside_b.includes(k)?'checked':''}> ${esc(k)}</label>`).join(' ');
 $('puba').value=P.public_a.join(', ');$('pubb').value=P.public_b.join(', ');$('pubnote').textContent='mapped: A '+d.public_a.mapped_count+', B '+d.public_b.mapped_count+' addresses (per-/24 ranges are a guess)';
 $('site').value=P.type;scopeInit();whatifDraw()}
 // ---------- scope
@@ -410,7 +423,7 @@ $('dl').onclick=()=>{const a=document.createElement('a');a.href='/api/report/'+R
 // ---------- summary + tables
 function showSum(){const rows=R.summary.filter(r=>SUMC.some(c=>r[c]));
 $('summary').innerHTML='<h3>Summary per scope subnet</h3><div class=wrap><table><tr><th>scope</th><th>subnet</th>'+SUMC.map(c=>`<th>${c}</th>`).join('')+'</tr>'+
-rows.map(r=>`<tr><td>${esc(r.scope)}</td><td>${esc(r.subnet)}</td>`+SUMC.map(c=>`<td>${esc(Object.entries(r[c]||{}).map(x=>x.join(' ')).join(', '))}</td>`).join('')+'</tr>').join('')+'</table></div>'+
+rows.map(r=>`<tr><td>${esc(r.scope)}</td><td>${esc(r.subnet)}</td>`+SUMC.map(c=>`<td>${esc(Object.entries(r[c]||{}).map(x=>L(x[0])+' '+x[1]).join(', '))}</td>`).join('')+'</tr>').join('')+'</table></div>'+
 (R.planned.length?'<p class=warn>What-if items assumed on B: '+R.planned.map(p=>esc(p.item)).join('; ')+'</p>':'')}
 function draw(){const c=COLS[cur],rows=R[cur]||[];const showh=$('showhidden').checked;const rc=cur!='planned';
 let h='<table><tr><th><input type=checkbox id=all></th>'+(rc?'<th>row</th>':'')+(cur=='rules'||cur=='held_rules'?'<th>action</th>':'')+c.map(x=>`<th>${x}</th>`).join('')+'</tr><tr><th></th>'+(rc?'<th></th>':'')+(cur=='rules'||cur=='held_rules'?'<th></th>':'')+c.map((x,i)=>`<th><input data-i=${i} class=flt size=6></th>`).join('')+'</tr>';
@@ -419,7 +432,7 @@ const rn=(r.rule||'').split(' ∩ ')[0];const act=(P.rule_actions||{})[rn]||'';
 h+=`<tr class="${st?'st':''}" data-ri=${ri}><td>${r.id?`<input type=checkbox class=ck value="${esc(r.id)}" ${sel.has(r.id)?'checked':''}>`:''}</td>`+
 (rc?`<td><select class=rs><option value="">include</option><option ${st&&st.state=='exclude'?'selected':''}>exclude</option><option ${st&&st.state=='not needed'?'selected':''}>not needed</option></select>${st&&st.reason?'<div class=mut>'+esc(st.reason)+'</div>':''}</td>`:'')+
 (cur=='rules'||cur=='held_rules'?`<td>${rn?`<select class=ra><option value="">as config</option>${['permit','block','ignore'].map(x=>`<option ${x==act?'selected':''}>${x}</option>`).join('')}</select>`:''}</td>`:'')+
-c.map(x=>`<td ${x=='status'&&R.glossary&&R.glossary[r[x]]?'title="'+esc(R.glossary[r[x]])+'"':''} class="${x=='status'?'s-'+esc(String(r[x]).split(' ')[0].replace(',','')):''}">${esc(Array.isArray(r[x])?r[x].join(', '):r[x])}</td>`).join('')+'</tr>'});
+c.map(x=>`<td ${x=='status'&&R.glossary&&R.glossary[r[x]]?'title="'+esc(R.glossary[r[x]])+'"':''} class="${x=='status'?'s-'+esc(String(r[x]).split(' ')[0].replace(',','')):''}">${esc(Array.isArray(r[x])?r[x].join(', '):(x=='status'?L(r[x]):r[x]))}</td>`).join('')+'</tr>'});
 $('tbl').innerHTML=h+'</table>';const off=(rc?1:0)+(cur=='rules'||cur=='held_rules'?1:0)+1;
 document.querySelectorAll('.ck').forEach(x=>x.onchange=()=>x.checked?sel.add(x.value):sel.delete(x.value));
 document.querySelectorAll('.rs').forEach(s=>s.onchange=()=>{const r=rows[+s.closest('tr').dataset.ri];P.row_state=P.row_state||{};

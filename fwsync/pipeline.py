@@ -131,6 +131,8 @@ def run(a_list, b, prof=None, parts=None):
         res.update(settings.build(a_list[0][0], b[0], A, B, prof, pairs, sitemap.edge_pairs(A, B, prof.interface_map, prof.outside_a),
                                   res.get('names', {'A': 'A', 'B': 'B'})))
         res['verdict'] = settings.verdict(res, res.get('names', {'A': 'A', 'B': 'B'}))
+    from . import runbook
+    runbook.build(res)
     res['gaps_area'] = 'fmc' if 'fmc' in (A.vendor, B.vendor) or any(a.vendor == 'fmc' for a in As) else 'lina'
     res['known_gaps'] = gaps.ranked(res['gaps_area'])
     return res, A, B, prof

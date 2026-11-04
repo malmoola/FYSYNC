@@ -189,13 +189,16 @@ def _is_link(ifaces, line):
 
 
 def takeover_checks(sa, sb, ta, tb, prof, pairs, na, names):
-    """plain findings about what must be true on B when A is gone: [{sev, area, title, detail, action}]"""
+    """what must be true on B when A is gone: [{severity, area, title, detail, action, group, subject, fmc, cli, verify}].
+    group is the runbook section: before (fix before failover), during, check (on the firewall), later, unprovable"""
     a, b = _ifaces(sa), _ifaces(sb)
     out = []
+    bn = names.get('B_short', names['B'])
+    dev = 'Devices > Device Management > %s' % bn
 
-    def add(sev, area, title, detail, action):
+    def add(sev, area, title, detail, action, group, subject, fmc, cli, verify):
         out.append({'id': 'T-%d' % (len(out) + 1), 'severity': sev, 'area': area, 'title': title, 'detail': detail,
-                    'action': action})
+                    'action': action, 'group': group, 'subject': subject, 'fmc': fmc, 'cli': cli, 'verify': verify})
     down = []
     for n, d in a.items():
         m = prof.interface_map.get(n, n)
@@ -204,65 +207,107 @@ def takeover_checks(sa, sb, ta, tb, prof, pairs, na, names):
             continue
         if x.get('shut'):
             down.append((n, m, d, x))
-    if down:
-        add('blocker', 'Interfaces', '%d %s interfaces are shut down: %s' % (len(down), names['B'], ', '.join(x[1] for x in down)),
-            '; '.join('%s %s (%s), %d hosts live on A' % (x[1], x[3].get('ip', ''), x[3]['phys'], len(_live(ta, x[0]))) for x in down),
-            'Add these to the failover runbook: no shutdown in FMC and deploy. They share addresses with A, so bring them up only after A is really gone. Traffic on them cannot pass until then.')
-        miss = [x[1] for x in down if not x[3].get('standby')]
-        if miss:
-            add('high', 'Interfaces', 'No standby IP on %s' % ', '.join(miss), 'A has a standby address on these interfaces. %s has none, so the HA pair cannot monitor them.' % names['B'],
-                'Add standby IPs in FMC before or during takeover, then enable interface monitoring.')
-    pbr = [(n, prof.interface_map.get(n, n), d['pbr']) for n, d in a.items() if d.get('pbr') and n not in prof.ignored_ifcs
-           and prof.interface_map.get(n, n) in b and not b[prof.interface_map.get(n, n)].get('pbr')]
-    if pbr:
-        add('high', 'Policy routing', 'Source-based routing on A has no match on %s for %d interfaces' % (names['B'], len(pbr)),
-            ', '.join('%s -> %s (%s)' % x for x in pbr), 'Decide whether these subnets need a fixed exit on %s. Without PBR they follow the default route.' % names['B'])
+    for n, m, d, x in down:
+        add('blocker', 'Interfaces', '%s is shut down on %s' % (m, names['B']),
+            '%s %s (%s); %d hosts live on it on %s.' % (m, x.get('ip', ''), x['phys'], len(_live(ta, n)), names['A']),
+            'Bring it up only after %s is really gone: it shares addresses with %s. Traffic on it cannot pass until '
+            'then.' % (names['A'], names['A']), 'during', m,
+            ['%s > Interfaces > edit %s: tick Enabled > OK > Save, then Deploy.' % (dev, x['phys'])],
+            ['interface %s' % x['phys'], ' no shutdown'], ['show interface %s' % m, 'show interface ip brief'])
+    for n, m, d, x in down:
+        if not x.get('standby') and d.get('standby'):
+            add('high', 'Interfaces', 'No standby IP on %s' % m,
+                '%s has a standby address on this interface. %s has none, so the HA pair cannot monitor it.' % (
+                    names['A'], names['B']),
+                'Add the standby IP before failover, then enable interface monitoring.', 'before', m,
+                ['%s > High Availability > Monitored Interfaces > edit %s: Standby IP Address, tick Enable Monitoring '
+                 '> OK, then Deploy.' % (dev, m)],
+                ['interface %s' % x['phys'], ' ip address %s <mask> standby <standby IP>' % x.get('ip', '<ip>'),
+                 'monitor-interface %s' % m], ['show failover | include %s' % m])
+    for n, m, pbr in [(n, prof.interface_map.get(n, n), d['pbr']) for n, d in a.items() if d.get('pbr')
+                      and n not in prof.ignored_ifcs and prof.interface_map.get(n, n) in b
+                      and not b[prof.interface_map.get(n, n)].get('pbr')]:
+        add('high', 'Policy routing', 'Source-based routing on %s has no match on %s' % (m, names['B']),
+            '%s uses route-map %s on %s.' % (names['A'], pbr, n),
+            'Your choice needed: does this network need a fixed exit on %s? Without PBR it follows the default route.' % bn,
+            'before', m, ['%s > Routing > Policy Based Routing > Add: Ingress Interface %s, Match Criteria and Egress '
+                          'like route-map %s on %s, then Deploy.' % (dev, m, pbr, names['A'])],
+            ['interface <%s physical interface>' % m, ' policy-route route-map %s' % pbr],
+            ['show route-map %s' % pbr, 'packet-tracer input %s tcp <host> 40000 8.8.8.8 443' % m])
     da, db = _default(sa), _default(sb)
     if da and db and prof.interface_map.get(da[0], da[0]) != db[0]:
-        add('review', 'Routing', 'The preferred internet exit differs', '%s prefers %s, %s prefers %s.' % (names['A'], da[0], names['B'], db[0]),
-            'Confirm this is intended. NAT and inbound rules for the preferred exit need to exist on that interface.')
+        add('review', 'Routing', 'The preferred internet exit differs', '%s prefers %s, %s prefers %s.' % (
+            names['A'], da[0], names['B'], db[0]),
+            'Confirm this is intended. NAT and inbound rules for the preferred exit need to exist on that interface.',
+            'later', db[0], ['%s > Routing > Static Route: compare the metric of the 0.0.0.0/0 routes.' % dev],
+            ['show running-config route | include 0.0.0.0 0.0.0.0'], ['show route 0.0.0.0'])
     oa, ob = _ospf(sa), _ospf(sb)
+
     def nets(v):
         return [ipaddress.IPv4Network('%s/%s' % tuple(x.split()[1:3]), strict=False) for x in v]
     nb = [n for v in ob.values() for n in nets(v)]
     gone = sorted({na(x) for v in oa.values() for x in v if not any(nets([na(x)])[0].overlaps(n) for n in nb)
                    and not _is_link(a, x)})
-    if gone:
-        add('high', 'OSPF', '%d OSPF networks on A are not advertised by %s' % (len(gone), names['B']), '; '.join(gone),
-            'Check each one. A network that nothing advertises after takeover cannot be reached from inside.')
+    for g in gone:
+        net = nets([g])[0]
+        add('high', 'OSPF', '%s is advertised by OSPF on %s, not on %s' % (net, names['A'], names['B']), g,
+            'Check it on %s. A network that nothing advertises after takeover cannot be reached from inside.' % bn,
+            'check', str(net), ['%s > Routing > OSPF > Area > edit the area: add network %s, then Deploy (only if '
+                                'show route says nothing else advertises it).' % (dev, net)],
+            ['show route %s' % net.network_address, 'router ospf <process>', ' network %s %s area <area>' % (
+                net.network_address, net.netmask)], ['show ospf database | include %s' % net.network_address])
     ma, mb = _monitored(sa), _monitored(sb)
-    off = [prof.interface_map.get(k, k) for k, v in ma.items() if v and mb.get(prof.interface_map.get(k, k)) is False]
-    if off:
-        add('review', 'High availability', 'Interfaces monitored on A are not monitored on %s: %s' % (names['B'], ', '.join(off)), '', 'Enable monitoring when those interfaces go live.')
+    for m in [prof.interface_map.get(k, k) for k, v in ma.items() if v and mb.get(prof.interface_map.get(k, k)) is False]:
+        add('review', 'High availability', '%s is monitored on %s, not on %s' % (m, names['A'], names['B']), '',
+            'Enable monitoring when the interface goes live.', 'during', m,
+            ['%s > High Availability > Monitored Interfaces > edit %s: tick Enable Monitoring, then Deploy.' % (dev, m)],
+            ['monitor-interface %s' % m], ['show failover | include %s' % m])
     s2s_a = [h for h, c in sa if re.match(r'tunnel-group \d+\S* type ipsec-l2l', h)]
     s2s_b = [h for h, c in sb if re.match(r'tunnel-group \d+\S* type ipsec-l2l', h)]
     if s2s_b and not s2s_a:
         add('good', 'Site-to-site VPN', 'Tunnels already end on %s' % names['B'], '; '.join(x.split()[1] for x in s2s_b),
-            'No move needed. Pre-shared keys are masked in the config, so the tunnel state must be checked on the box: show crypto ikev2 sa.')
+            'No move needed. Pre-shared keys are masked in the config, so check the tunnel state on the box.',
+            'later', 'site-to-site VPN', ['Devices > VPN > Site To Site: check each topology that uses %s.' % bn],
+            ['show crypto ikev2 sa', 'show crypto ipsec sa | include peer'], ['show vpn-sessiondb l2l'])
     pool = lambda st: [h for h, c in st if h.startswith('ip local pool')]
     if pool(sa) and pool(sb):
-        add('good' if pool(sa) != pool(sb) else 'review', 'Remote access VPN', 'Each site has its own VPN pool', '%s / %s' % (pool(sa)[0], pool(sb)[0]),
-            'Users reconnect to the %s headend. Confirm split-tunnel, group policy, certificate and DNS name for it.' % names['B'])
+        add('good' if pool(sa) != pool(sb) else 'review', 'Remote access VPN', 'Each site has its own VPN pool',
+            '%s / %s' % (pool(sa)[0], pool(sb)[0]),
+            'Users reconnect to the %s headend. Confirm split-tunnel, group policy, certificate and DNS name for it.' % bn,
+            'later', 'remote access VPN', ['Devices > VPN > Remote Access > edit the %s policy: check Connection '
+                                           'Profile, Group Policy and Address Pool.' % bn],
+            ['show running-config ip local pool', 'show running-config group-policy'], ['show vpn-sessiondb anyconnect'])
     wa = [x for h, c in sa if h == 'webvpn' for x in c if x.startswith('enable ')]
     wb = [x for h, c in sb if h == 'webvpn' for x in c if x.startswith('enable ')]
     if sorted(wa) != sorted(wb):
-        add('review', 'Remote access VPN', 'VPN is enabled on different interfaces', 'A: %s. B: %s.' % (', '.join(wa) or 'none', ', '.join(wb) or 'none'), 'Enable it on every ISP that should serve users after takeover.')
+        add('review', 'Remote access VPN', 'VPN is enabled on different interfaces', '%s: %s. %s: %s.' % (
+            names['A'], ', '.join(wa) or 'none', names['B'], ', '.join(wb) or 'none'),
+            'Enable it on every ISP that should serve users after takeover.', 'later', 'remote access VPN',
+            ['Devices > VPN > Remote Access > edit the %s policy > Access Interfaces: add the interfaces.' % bn],
+            ['webvpn', ' enable <interface>'], ['show running-config webvpn'])
     add('verify', 'Not visible in this config', 'These cannot be checked from show running-config',
-        'Masked keys and passwords; Snort intrusion and file policies; URL, application and geolocation rule conditions; Security Intelligence; the upstream ISP or edge route for public ranges that move; FMC variable overrides.',
-        'Export the FMC access policy or use an FMC snapshot, and confirm with the ISP that shared public ranges can be routed to %s.' % names['B'])
+        'Masked keys and passwords; Snort intrusion and file policies; URL, application and geolocation rule conditions; '
+        'Security Intelligence; the upstream ISP or edge route for public ranges that move; FMC variable overrides.',
+        'Export the FMC access policy or use an FMC snapshot, and confirm with the ISP that shared public ranges can be '
+        'routed to %s.' % names['B'], 'unprovable', 'FMC policy and ISP',
+        ['Policies > Access Control > edit the %s policy: check intrusion, file, URL and application settings per '
+         'rule; Objects > Object Management > Variable Set: check overrides.' % bn],
+        ['show access-control-config', 'show snort statistics'], ['show route <moved public range>'])
     return out
 
 
 def verdict(res, names):
     """the one answer: can B take over, and what stands in the way, per area"""
     t = res.get('takeover', [])
-    rules = [r for r in res.get('rules', []) if r['status'] != 'covered' and not r.get('row_state')]
-    inb = [r for r in res.get('inbound', []) if not r['status'].startswith('ready') and not r.get('row_state')]
+    own = res.get('b_owned', {})
+    theirs = lambda r: not (r.get('scopes') and all(p in own for p in r['scopes']))
+    rules = [r for r in res.get('rules', []) if r['status'] != 'covered' and not r.get('row_state') and theirs(r)]
+    inb = [r for r in res.get('inbound', []) if not r['status'].startswith('ready') and not r.get('row_state') and theirs(r)]
     missing_nat = [r for r in res.get('firewide', []) if r['check'].startswith('published')]
     blocks = [r for r in res.get('firewide', []) if r['check'].startswith('A block')]
     dead = [r for r in res.get('firewide', []) if r['check'].startswith('B rule')]
-    pat = [f for f in res.get('findings', []) if f.get('category') == 'pat']
-    rt = [f for f in res.get('findings', []) if f.get('category') == 'routing']
+    pat = [f for f in res.get('findings', []) if f.get('category') == 'pat' and not f.get('b_own')]
+    rt = [f for f in res.get('findings', []) if f.get('category') == 'routing' and f.get('level') != 'check']
     objs = [o for o in res.get('objects_all', []) if o['status'] in ('different value',)]
     gaps = [('Interfaces up', sum(1 for x in t if x['severity'] == 'blocker')), ('Outbound PAT', len(pat)), ('Routing', len(rt)),
             ('Published servers', len(inb)), ('Other public addresses with no NAT on B', len(missing_nat)),
@@ -271,8 +316,10 @@ def verdict(res, names):
             ('Settings to review', sum(1 for x in t if x['severity'] in ('high', 'review')))]
     open_ = sum(n for k, n in gaps)
     block = sum(n for k, n in gaps[:4])
+    from .findings import named
     return {'ready': block == 0, 'text': '%s can%s take over from %s: %d must be fixed first, %d items open in total.' % (
-        names['B'], '' if block == 0 else 'not yet', names['A'], block, open_), 'areas': [{'area': k, 'open': n} for k, n in gaps]}
+        names['B'], '' if block == 0 else 'not yet', names['A'], block, open_),
+        'areas': [{'area': named(k, names), 'open': n} for k, n in gaps]}
 
 
 def object_table(A, B, tag, used_text):
@@ -300,7 +347,8 @@ def object_table(A, B, tag, used_text):
             bn = b.name if b is not None else ''
         elif b is not None:
             same = repr(val(B, b)) == repr(v) or o.kind != 'group' and val(B, b) == getattr(o, 'raw_addrs', None)
-            st = 'same' if same else 'different value'
+            superset = o.kind == 'group' and b.kind == 'group' and v.issubset(val(B, b))
+            st = 'same' if same else 'B has extra entries' if superset else 'different value'
             other, bn = repr(val(B, b)), b.name
         elif repr(v) in by_val:
             st, bn, other = 'same value, other name', by_val[repr(v)][0], repr(v)
