@@ -7,7 +7,7 @@ import ipaddress
 import re
 
 from . import natorder
-from .compare import BROAD, nat_kind
+from .compare import BROAD, nat_kind, same_nat_group
 from .detect import route_split, route_split_up, route_table, specific_ifc
 from .findings import Ctx, _key, map_nat_line, sample
 from .netset import IPSet, is_public
@@ -178,6 +178,8 @@ def nat_ifc_mismatch(ctx, out):
         ifcs = {x for x, part in parts}
         if not ifcs or m.real_ifc in ifcs:
             continue
+        if ifcs <= {x.real_ifc for x in same_nat_group(B.nats, m)}:
+            continue                                     # one rule on an interface group: another member covers it
         today = {x for x, part in route_split_up(B, m.real)}
         main = max(parts, key=lambda x: x[1].size())[0]
         kind = nat_kind(m)

@@ -110,14 +110,39 @@ def _trim(o, keep):
 
 
 # ---------------------------------------------------------------------------------------------------- snapshot
+def _interface_groups(c, snap):
+    """Interface Groups work like security zones in ACP and NAT rules, and may hold interfaces of other devices."""
+    try:
+        groups = c.all('/object/interfacegroups')
+    except RuntimeError as e:
+        snap['warnings'].append('Interface groups could not be read: %s' % e)
+        return []
+    snap['zones'].update({g['id']: g['name'] for g in groups if g.get('id')})
+    return groups
+
+
+def _group_members(groups, interfaces):
+    """{group name: [this device's nameifs]}. Members match by id. A member with no id matches by nameif."""
+    by_id = {i['id']: i['ifname'] for i in interfaces if i.get('id') and i.get('ifname')}
+    names = {i['ifname'] for i in interfaces if i.get('ifname')}
+    out = {}
+    for g in groups:
+        for m in g.get('interfaces') or []:
+            n = by_id.get(m.get('id')) if m.get('id') else (m.get('name') if m.get('name') in names else None)
+            if n and n not in out.setdefault(g['name'], []):
+                out[g['name']].append(n)
+    return out
+
+
 def snapshot(c, device=None, policy=None, nat_policy=None):
     """device: read the device, its interfaces, static routes, assigned ACP and NAT policy.
     policy (no device): read only that ACP (and nat_policy if given); zone names stand in for interfaces."""
     snap = {'fwsync_fmc_snapshot': 1, 'fmc': c.url.split('//')[-1], 'user': c.user,
             'taken': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'device': None, 'interfaces': [],
             'routes': [], 'bgp': [], 'access_policy': None, 'prefilter': None, 'nat_policy': None, 'zones': {}, 'objects': {},
-            'warnings': []}
+            'iface_groups': {}, 'warnings': []}
     snap['zones'] = {z['id']: z['name'] for z in c.all('/object/securityzones', expanded=False)}
+    groups = _interface_groups(c, snap)
     acp_name, nat_name = policy, nat_policy
     if device:
         d = c.find('/devices/devicerecords', device)
@@ -135,10 +160,12 @@ def snapshot(c, device=None, policy=None, nat_policy=None):
             for i in items:
                 ip = ((i.get('ipv4') or {}).get('static') or {})
                 snap['interfaces'].append({
+                    'id': i.get('id', ''),
                     'name': i['name'] + ('.%s' % i['subIntfId'] if i.get('subIntfId') else ''), 'ifname': i.get('ifname', ''),
                     'zone': snap['zones'].get((i.get('securityZone') or {}).get('id'), ''), 'ip': ip.get('address', ''),
                     'mask': ip.get('netmask', ''), 'vlan': i.get('vlanId'), 'enabled': i.get('enabled', True),
                     'management_only': i.get('managementOnly', False)})
+        snap['iface_groups'] = _group_members(groups, snap['interfaces'])
         snap['routes'] = [_trim(r, ('interfaceName', 'selectedNetworks', 'gateway', 'metricValue', 'routeTracking', 'id'))
                           for r in c.all('/devices/devicerecords/%s/routing/ipv4staticroutes' % d['id'])]
         try:
@@ -211,6 +238,8 @@ class Render:
         for i in snap.get('interfaces', []):
             if i.get('ifname') and i.get('zone'):
                 self.zone_ifs.setdefault(i['zone'], []).append(i['ifname'])
+        for g, ifs in (snap.get('iface_groups') or {}).items():
+            self.zone_ifs.setdefault(g, []).extend(x for x in ifs if x not in self.zone_ifs[g])
 
     def ref(self, r):
         return self.obj.get(r.get('id')) or self.byname.get(r.get('name'))

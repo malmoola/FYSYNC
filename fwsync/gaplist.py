@@ -18,7 +18,8 @@ from collections import Counter
 from dataclasses import replace
 
 from . import natorder
-from .compare import PERMIT, _is_default, any_any, tunnel_default, block_name, effective_rules, fqdn_names, fqdn_value
+from .compare import PERMIT, _is_default, any_any, tunnel_default, block_name, effective_rules, fqdn_names, fqdn_value, \
+    same_nat_group, same_rule_name
 from .detect import route_split, route_split_up, route_table
 from .netset import IPSet, is_public
 
@@ -397,6 +398,9 @@ class Gaps:
                 w_ifc = (list(getattr(self.B, 'ra_ifcs', []) or []) or [self.b_out])[0]
             for x, m in [y for d in dsts for y in walk(self.b_seq, part, w_ifc, out, d, n.service)]:
                 b_lines.append(ref(m) if m is not None else '(no NAT on %s for %s from %s)' % (self.b, _cidrs(x), ifc))
+                members = sorted({y.real_ifc for y in same_nat_group(self.B.nats, m)}) if m is not None else []
+                if len(members) > 1:
+                    b_lines[-1] += ' (one rule on %s)' % ', '.join(members)
                 if kind != 'exempt' and (m is None or identity(m) or (dst_xlate(n) and m.dst_mapped != n.dst_mapped)):
                     bad, first = bad | x, first or m
                     continue
@@ -888,6 +892,8 @@ class Gaps:
             for p, m in e['parts']:
                 x = x | p
             ms = list({id(m): m for p, m in e['parts'] if m is not None}.values())
+            if x != n.real and x.issubset(n.real) and not n.real.is_any() and len(n.real.cidrs()) == 1:
+                x = n.real                # one network on A: one exemption, not the pieces B happens to translate
             a_line, addr = ref(n, self.a), _cidrs(x)
             name, objs = self.obj(x, '' if x != n.real else n.real_ref)
             dn, dobjs = self.obj(n.dst_real, '') if n.dst_real is not None else ('any', [])
@@ -1213,7 +1219,7 @@ class Gaps:
 
     def zones_to_add(self, name, rules):
         """B has a rule of this name: the mapped zones of A's lines it lacks"""
-        same = [b for b in self.B.rules if not b.inactive and (b.rule_name or '') == name]
+        same = [b for b in self.B.rules if not b.inactive and same_rule_name(b.rule_name, name)]
         if not same:
             return []
         add = []
@@ -1238,7 +1244,7 @@ class Gaps:
         x = rules[0]
         addr = _flow(rules)
         if any(any_any(y) for y in rules):
-            same = [b for b in self.B.rules if not b.inactive and (b.rule_name or '') == name]
+            same = [b for b in self.B.rules if not b.inactive and same_rule_name(b.rule_name, name)]
             if same and all(any(_ace(b.line) == _ace(self._mapped_line(y)) for b in same) for y in rules):
                 return                    # the same rule with the same LINA lines on the mapped zones
             site = [b for b in self.B.rules if not b.inactive and b.rule_name and self.site_name(name) == _norm(b.rule_name)

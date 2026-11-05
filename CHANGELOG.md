@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.5 – 2026-11-05
+
+Tables you can actually read.
+
+- Details tables sit in a box that fits the window, with a horizontal scrollbar along the top as well as the bottom.
+  Before, the only horizontal scrollbar was at the very end of a table that could be thousands of pixels tall.
+- Long cells (scope, intersected_with, detail and similar) show 3 lines; click one to see all of it. Column filters
+  still search the full text.
+- Both header rows stay visible while scrolling. Summary per scope subnet is collapsed so the table starts higher.
+- The HTML report gets the same box and long-cell behaviour.
+- FMC read: Interface Groups now work like security zones. Before, a NAT rule kept the group name as if it were one
+  interface, and an access rule using a group lost its interfaces and was left out. A rule on a group that holds both
+  inside and a shut shared interface is judged on each member, so it covers today's path and the outage path.
+- One FMC NAT rule on an interface group is deployed as one line per member. The NAT and Inbound views, Findings and
+  Takeover now judge those lines together: the line on the server's interface counts, and the other members are not
+  flagged. Before, they stopped at the first line and reported wrong interface.
+- A rule FMC renamed when copying it (`Name-207`, or a stray space) is matched to A's rule when its LINA lines are the
+  same. Before, those L7 rules became Compare in FMC and L7 blocks became Missing block.
+- A NAT exemption for one network on A stays one row with that network, not the pieces B happens to translate.
+- macOS: the launcher only picks Python 3.10 to 3.13, and the README says so. The bundled wheels do not cover 3.14.
+
 ## 0.5.4 – 2026-11-04
 
 Remediation fixes that are safe to follow. A wrong fix is worse than no fix: where the tool cannot be sure, the item

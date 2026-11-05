@@ -229,3 +229,49 @@ def test_object_payloads_are_not_treated_as_references(tmp_path):
     assert port['port'] == '8443' and port['name'] == 'tcp_8443'
     grp = [c[2] for c in w.s.calls if c[0] == 'POST' and c[1].startswith('/object/portobjectgroups')][0]
     assert grp['objects'][0]['id'].startswith('new-')
+
+
+def group_snap():
+    rule = {'id': 'r1', 'name': 'web in', 'action': 'ALLOW', 'enabled': True,
+            'sourceZones': {'objects': [{'id': 'z-OUT', 'type': 'SecurityZone', 'name': 'OUT'}]},
+            'destinationZones': {'objects': [{'id': 'g-1', 'type': 'InterfaceGroup', 'name': 'GRP.shared'}]},
+            'destinationNetworks': {'objects': [{'type': 'Host', 'id': 'o-1', 'name': 'SRV.web'}]}}
+    nat = {'natType': 'STATIC', 'originalSource': {'type': 'Host', 'id': 'o-1', 'name': 'SRV.web'},
+           'translatedSource': {'type': 'Host', 'id': 'o-2', 'name': 'PUB.web'},
+           'sourceInterface': {'id': 'g-1', 'type': 'InterfaceGroup', 'name': 'GRP.shared'},
+           'destinationInterface': {'id': 'z-OUT', 'type': 'SecurityZone', 'name': 'OUT'}, 'metadata': {'index': 1}}
+    s = snap(rules=[rule], nat=[nat])
+    s['interfaces'].append({'name': 'Gi0/2', 'ifname': 'SHARED', 'zone': '', 'ip': '10.2.2.1', 'mask': '24'})
+    s['zones']['g-1'] = 'GRP.shared'
+    s['iface_groups'] = {'GRP.shared': ['INSIDE', 'SHARED']}
+    return s
+
+
+def test_interface_group_expands_to_its_members_in_nat_and_rules():
+    text, _ = fmc.render(group_snap())
+    assert 'nat (INSIDE,OUTSIDE) source static SRV.web PUB.web' in text
+    assert 'nat (SHARED,OUTSIDE) source static SRV.web PUB.web' in text
+    assert 'GRP.shared,' not in text
+    assert 'ifc OUTSIDE any ifc INSIDE object SRV.web' in text and 'ifc OUTSIDE any ifc SHARED object SRV.web' in text
+
+
+def test_group_members_keep_only_this_device():
+    ifs = [{'id': 'i1', 'ifname': 'INSIDE'}, {'id': 'i2', 'ifname': 'SHARED'}]
+    g = [{'name': 'G', 'interfaces': [{'id': 'i1', 'name': 'x'}, {'id': 'other', 'name': 'SHARED'}, {'name': 'SHARED'}]}]
+    assert fmc._group_members(g, ifs) == {'G': ['INSIDE', 'SHARED']}
+
+
+def test_snapshot_reads_interface_groups_and_a_refused_read_warns():
+    class C:
+        def all(self, path, expanded=True):
+            if path == '/object/interfacegroups':
+                return [{'id': 'g', 'name': 'G', 'interfaces': []}]
+            return []
+    s = {'zones': {}, 'warnings': []}
+    assert fmc._interface_groups(C(), s)[0]['name'] == 'G' and s['zones'] == {'g': 'G'}
+
+    class D:
+        def all(self, path, expanded=True):
+            raise RuntimeError('403')
+    s = {'zones': {}, 'warnings': []}
+    assert fmc._interface_groups(D(), s) == [] and 'Interface groups' in s['warnings'][0]

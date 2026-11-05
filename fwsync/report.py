@@ -75,8 +75,8 @@ CSS = """body{font:13px system-ui,sans-serif;margin:16px;color:#1d2330;backgroun
 .fnum{color:#5b6474}.cat{background:#eef1f6;padding:1px 6px;border-radius:3px}.part{margin:4px 0}.part b{display:inline-block;min-width:110px}
 .state{float:right}.state.fix{color:#17663a}.state.not-needed{color:#5b6474}.state.later{color:#8a5a00}
 .ev{font-size:12px}.decision{border-left:3px solid #a3141f;padding:2px 10px;margin:8px 0}pre{background:#f6f8fa;padding:6px;white-space:pre-wrap;overflow-x:auto}
-h1{font-size:20px}h2{font-size:16px;margin-top:28px}table{border-collapse:collapse;width:100%}.wrap{overflow-x:auto;max-width:100%}
-th,td{border:1px solid #d6dae2;padding:3px 6px;text-align:left;vertical-align:top}th{background:#eef1f6;position:sticky;top:0}
+h1{font-size:20px}h2{font-size:16px;margin-top:28px}table{border-collapse:collapse;width:100%}.wrap{overflow:auto;max-width:100%;max-height:calc(100vh - 40px)}
+th,td{border:1px solid #d6dae2;padding:3px 6px;text-align:left;vertical-align:top}th{background:#eef1f6;position:sticky;top:0;z-index:2;white-space:nowrap}tr.ff th{top:27px}.clip{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;min-width:200px;max-width:360px;cursor:pointer}.clip.open{display:block}
 .s-covered,.s-match,.s-same,.s-ready{color:#17663a}.s-partial{color:#8a5a00}
 .s-missing,.s-denied,.s-shadowed,.s-wrong,.s-over-permitted,.s-mapped,.s-no{color:#a3141f;font-weight:600}
 .det td,.det th{font-size:12px}.flag{color:#a3141f}.small{color:#5b6474}.counts td{border:none;padding:1px 10px 1px 0}
@@ -142,7 +142,7 @@ def write_html(res, path, title='fwsync report'):
         rows = res.get(key, [])
         out.append('<details><summary>%s (%d)</summary><div class=wrap><table data-t=%s><tr>%s</tr>' % (
             e(named_title(t, n)), len(rows), key, ''.join('<th>%s</th>' % e(c) for c in cols)))
-        out.append('<tr>%s</tr>' % ''.join('<th><input class=f oninput="flt(this)"></th>' for c in cols))
+        out.append('<tr class=ff>%s</tr>' % ''.join('<th><input class=f oninput="flt(this)"></th>' for c in cols))
         for r in rows:
             cells = []
             for c in cols:
@@ -150,7 +150,10 @@ def write_html(res, path, title='fwsync report'):
                 v = ', '.join(v) if isinstance(v, list) else str(v)
                 tip = ' title="%s"' % e(gl.get(v, '')) if c == 'status' and gl.get(v) else ''
                 cls = ' class="s-%s"' % e(v.split()[0].rstrip(',')) if c == 'status' and v else ''
-                cells.append('<td%s%s>%s</td>' % (cls, tip, e(lab(res, v) if c == 'status' else v)))
+                txt = e(lab(res, v) if c == 'status' else v)
+                if c in CLIP_COLS and len(v) > 120:
+                    txt = '<div class=clip title="Click to show all" onclick="this.classList.toggle(\'open\')">%s</div>' % txt
+                cells.append('<td%s%s>%s</td>' % (cls, tip, txt))
             out.append('<tr>%s</tr>' % ''.join(cells))
         out.append('</table></div></details>')
     out.append('</details>')
@@ -158,6 +161,8 @@ def write_html(res, path, title='fwsync report'):
 for(const r of [...t.rows].slice(2)){r.style.display=c.every((v,k)=>!v||r.cells[k].textContent.toLowerCase().includes(v))?'':'none'}}</script>""")
     Path(path).write_text('\n'.join(out), encoding='utf-8')
 
+
+CLIP_COLS = ('scope', 'intersected_with', 'a_rules', 'detail', 'addresses', 'nat')
 
 GAP_REF = [('nat_ref', 'Every %(A)s NAT line, with %(B)s\'s first match', ['line', 'text', 'kind', 'result', 'b_match']),
            ('rule_ref', 'Every %(A)s rule, with %(B)s\'s match', ['rule', 'lines', 'action', 'result', 'b_match']),

@@ -1,6 +1,6 @@
 #!/bin/zsh
 # fwsync launcher for macOS. Double-click it in Finder (first time: right-click > Open).
-# First run: finds Python (3.12 preferred, any 3.10+), creates a venv in ~/Library/Application Support/fwsync and installs fwsync
+# First run: finds Python (3.12 preferred, any 3.10 to 3.13), creates a venv in ~/Library/Application Support/fwsync and installs fwsync
 # offline from the bundled vendor/wheels. Every run: starts the web UI on 127.0.0.1 on the first free port from 8765, opens the
 # browser, and stops the server when this Terminal window is closed.
 set -u
@@ -24,14 +24,14 @@ find_python() {
            python3; do
     p=$(command -v "$c" 2>/dev/null) || continue
     [[ -x "$p" ]] || continue
-    "$p" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null && { print -r -- "$p"; return 0; }
+    "$p" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 13) else 1)' 2>/dev/null && { print -r -- "$p"; return 0; }
   done
   return 1
 }
 
 no_python() {
   local a
-  a=$(osascript -e 'display dialog "fwsync needs Python 3.10 or newer.\n\nInstall it from python.org (macOS 64-bit universal installer), then open fwsync again." with title "fwsync" buttons {"Cancel", "Open python.org"} default button 2 with icon caution' 2>/dev/null)
+  a=$(osascript -e 'display dialog "fwsync needs Python 3.10 to 3.13 (3.12 preferred).\n\nInstall it from python.org (macOS 64-bit universal installer), then open fwsync again." with title "fwsync" buttons {"Cancel", "Open python.org"} default button 2 with icon caution' 2>/dev/null)
   [[ "$a" == *"python.org"* ]] && open "https://www.python.org/downloads/macos/"
   exit 1
 }
