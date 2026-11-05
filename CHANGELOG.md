@@ -10,6 +10,9 @@ Tables you can actually read.
   still search the full text.
 - Both header rows stay visible while scrolling. Summary per scope subnet is collapsed so the table starts higher.
 - The HTML report gets the same box and long-cell behaviour.
+- FMC read: Interface Groups now work like security zones. Before, a NAT rule kept the group name as if it were one
+  interface, and an access rule using a group lost its interfaces and was left out. A rule on a group that holds both
+  inside and a shut shared interface is judged on each member, so it covers today's path and the outage path.
 - macOS: the launcher only picks Python 3.10 to 3.13, and the README says so. The bundled wheels do not cover 3.14.
 
 ## 0.5.4 – 2026-11-04
