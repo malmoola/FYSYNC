@@ -140,3 +140,33 @@ def test_route_rows_have_no_nat_lines():
     for r in rows(res):
         if r['kind'] == 'route':
             assert not [c for c in r['config'] if c.startswith('nat ')]
+
+
+# a copied "destination static" keeps B's object of the same name (also for any), else B's object of the same value,
+# else adds the object
+ALL = 'object network obj_all\n subnet 0.0.0.0 0.0.0.0\n'
+EXEMPT_ALL = 'nat (inside,outside) source static IN-NET IN-NET destination static obj_all obj_all\n'
+PAT_IN_B = 'nat (inside,outside) after-auto source dynamic IN-NET interface\n'
+
+
+def _exempt_cfg(b_extra):
+    r = rows(go(ALL + EXEMPT_ALL, PAT_IN_B, b_base=B + b_extra), 'Missing NAT exemption')
+    assert len(r) == 1
+    return r[0]['config']
+
+
+def test_destination_object_of_the_same_name_is_kept():
+    c = _exempt_cfg(ALL)
+    assert [x for x in c if 'destination static obj_all obj_all' in x]
+    assert not [x for x in c if 'destination static any any' in x] and 'object network obj_all' not in c
+
+
+def test_destination_object_reuses_b_object_of_the_same_value():
+    c = _exempt_cfg('object network every-net\n subnet 0.0.0.0 0.0.0.0\n')
+    assert [x for x in c if 'destination static every-net every-net' in x] and 'object network obj_all' not in c
+
+
+def test_destination_object_is_added_when_b_has_none():
+    c = _exempt_cfg('')
+    assert [x for x in c if 'destination static obj_all obj_all' in x]
+    assert 'object network obj_all' in c and ' subnet 0.0.0.0 0.0.0.0' in c

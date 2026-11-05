@@ -173,6 +173,8 @@ Timing and safety:
 - Block position text is true: a B rule is said to carry an A allow only when that A allow is above the block in A's
   order and takes some of its traffic, and the allow is named with its line. The block goes above the first B allow
   that lets any of its traffic through (and so above the broad allow after it).
+- A copied "destination static" keeps B's object of the same name (an any-network object stays that object, never the
+  keyword any), else uses B's object with the same value, else adds the object in the row's config.
 - Route rows carry route commands only; the NAT a route depends on is judged by the NAT walk.
 - The NAT reference result no longer depends on set order when two results tie.
 - Docs: shared interfaces and the unreachable-address assumption are described in the README and known gaps.

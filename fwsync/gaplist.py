@@ -685,10 +685,24 @@ class Gaps:
         mm = re.search(r'\bdestination static (\S+) (\S+)', n.line)
         if not mm or n.dst_real is None:
             return '', '', []
-        d1, o1 = self.obj(n.dst_real, mm.group(1))
-        d2, o2 = self.obj(n.dst_mapped if n.dst_mapped is not None else n.dst_real, mm.group(2))
+        d1, o1 = self.dst_obj(n.dst_real, mm.group(1))
+        d2, o2 = self.dst_obj(n.dst_mapped if n.dst_mapped is not None else n.dst_real, mm.group(2))
         return (' destination static %s %s' % (d1, d2), '; Original Destination %s, Translated Destination %s' % (d1, d2),
                 o1 + o2)
+
+    def dst_obj(self, s, a_name):
+        """B's object for one of A's destination objects: B's object of the same name, else B's object with the same
+        value, else that object added (an any-network object stays an object, never the keyword any)"""
+        from .findings import obj_line, safe
+        if a_name in self.B.objects:
+            return a_name, []
+        if a_name in ('any', 'any4'):
+            return 'any', []
+        hits = self.ctx.bvals.get(repr(s), [])
+        if hits:
+            return (a_name if a_name in hits else sorted(hits, key=len)[0]), []
+        name = safe(a_name) if a_name else 'NET_%s' % s.cidrs()[0].replace('/', '_')
+        return name, [dict(obj_line(name, s), _addrs=s)]
 
     def b_pool(self):
         """(object name, addresses, objects) of B's active VPN pool: the pool a tunnel group hands out, else B's first"""
