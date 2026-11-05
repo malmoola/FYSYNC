@@ -19,7 +19,7 @@ from dataclasses import replace
 
 from . import natorder
 from .compare import PERMIT, _is_default, any_any, tunnel_default, block_name, effective_rules, fqdn_names, fqdn_value, \
-    same_rule_name
+    same_nat_group, same_rule_name
 from .detect import route_split, route_split_up, route_table
 from .netset import IPSet, is_public
 
@@ -398,6 +398,9 @@ class Gaps:
                 w_ifc = (list(getattr(self.B, 'ra_ifcs', []) or []) or [self.b_out])[0]
             for x, m in [y for d in dsts for y in walk(self.b_seq, part, w_ifc, out, d, n.service)]:
                 b_lines.append(ref(m) if m is not None else '(no NAT on %s for %s from %s)' % (self.b, _cidrs(x), ifc))
+                members = sorted({y.real_ifc for y in same_nat_group(self.B.nats, m)}) if m is not None else []
+                if len(members) > 1:
+                    b_lines[-1] += ' (one rule on %s)' % ', '.join(members)
                 if kind != 'exempt' and (m is None or identity(m) or (dst_xlate(n) and m.dst_mapped != n.dst_mapped)):
                     bad, first = bad | x, first or m
                     continue
