@@ -31,7 +31,8 @@ Details, the command line and the **WSL** fallback: [WINDOWS.md](WINDOWS.md).
 
 ### macOS
 
-1. `fwsync-<ver>.zip`, unzip. Needs Python 3.10+ (3.12 preferred, python.org or Homebrew).
+1. `fwsync-<ver>.zip`, unzip. Needs Python 3.10 to 3.13 (3.12 preferred, python.org or Homebrew: `brew install python@3.12`).
+   The bundled wheels do not cover 3.14 or newer, so an offline install fails there with "No matching distribution found for PyYAML".
 2. Double-click `packaging/macos/fwsync.command` (first time: right-click > **Open** > Open; the zip is not signed).
    Or in Terminal: `xattr -dr com.apple.quarantine ~/Downloads/fwsync-<ver>`.
 3. First run: creates `~/Library/Application Support/fwsync/venv` and installs offline from `vendor/wheels`. Every run:

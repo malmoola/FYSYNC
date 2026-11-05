@@ -44,3 +44,17 @@ def test_native_app_server_starts():
     finally:
         server.should_exit = True
         t.join(timeout=5)
+
+
+def test_details_table_can_be_scrolled_and_long_cells_clip():
+    page = TestClient(app).get('/').text
+    assert 'id=tbltop' in page and 'function fitTbl' in page               # scrollbar on top, box fits the window
+    assert 'tr class=ff' in page and 'tr.ff th{top:' in page               # both header rows stay visible
+    assert "CLIP=new Set(['scope'" in page and '.clip.open{display:block}' in page
+
+
+def test_report_long_cells_clip_and_keep_full_text(tmp_path):
+    from fwsync import report
+    long = ', '.join('subnet-%d' % i for i in range(40))
+    assert 'scope' in report.CLIP_COLS and len(long) > 120
+    assert '.clip.open{display:block}' in report.CSS and 'max-height:calc(100vh' in report.CSS

@@ -172,11 +172,11 @@ input[type=text],textarea,select{background:var(--bg);color:var(--fg);border:1px
 button{background:var(--acc);color:#fff;border:0;padding:5px 12px;border-radius:4px;cursor:pointer;margin:0 6px 4px 0}
 button.sec{background:var(--head);color:var(--fg)}button.x{background:none;color:var(--bad);padding:0 4px}
 table{border-collapse:collapse;width:100%}th,td{border:1px solid var(--line);padding:3px 6px;text-align:left;vertical-align:top}
-th{background:var(--head);position:sticky;top:0}.tabs button{background:var(--head);color:var(--fg)}.tabs button.on{background:var(--acc);color:#fff}
+th{background:var(--head);position:sticky;top:0;z-index:2;white-space:nowrap}tr.ff th{top:27px}.clip{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;min-width:200px;max-width:360px;cursor:pointer}.clip.open{display:block}.long{min-width:160px}#tbltop{overflow-x:auto;overflow-y:hidden;height:16px;max-width:100%}#tbltop div{height:1px}.tabs button{background:var(--head);color:var(--fg)}.tabs button.on{background:var(--acc);color:#fff}
 .s-covered,.s-match,.s-same,.s-ready,.s-ok,.s-also{color:var(--ok)}.s-partial,.s-other,.s-differs,.s-action,.s-blocked{color:var(--warn)}
 .s-missing,.s-denied,.s-shadowed,.s-inactive,.s-nat,.s-mapped,.s-wrong,.s-no,.s-over-permitted{color:var(--bad);font-weight:600}
 pre{white-space:pre-wrap;border:1px solid var(--line);padding:8px;max-height:420px;overflow:auto}.mut{color:var(--mut)}.flag{color:var(--bad)}
-.wrap{overflow-x:auto}.box{max-height:300px;overflow:auto;border:1px solid var(--line)}.hide{display:none}tr.st td{opacity:.55}
+.wrap{overflow:auto;max-width:100%;max-height:calc(100vh - 40px)}.box{max-height:300px;overflow:auto;border:1px solid var(--line)}.hide{display:none}tr.st td{opacity:.55}
 .warn{color:var(--warn)}.kids{background:var(--head)}
 fieldset{min-width:0;max-width:100%;box-sizing:border-box}input,select{max-width:100%;box-sizing:border-box}.gaps td pre{margin:0;font-size:12px;max-width:520px;white-space:pre-wrap}.verdict{font-size:15px;font-weight:600;margin:6px 0}.verdict.ok{color:var(--ok)}.verdict.no{color:var(--bad)}
 .cards{display:flex;flex-wrap:wrap;gap:12px}.card{border:1px solid var(--line);border-radius:6px;padding:8px 12px;min-width:320px}
@@ -251,7 +251,7 @@ Profile path (JSON or YAML) <input type=text name=profile_path size=50></details
 reason <input type=text id=breason size=20> <button type=button class=sec id=bapply>apply to all shown rows</button>
 <label><input type=checkbox id=showhidden> show "not needed" rows</label>
 <span id=l7ctl> | rule names matching <input type=text id=l7f size=16 placeholder="e.g. block"> <button type=button class=sec id=l7block>mark as block</button></span></p>
-<div class=wrap id=tbl></div>
+<div id=tbltop><div></div></div><div class=wrap id=tbl></div>
 <p><button id=gen>Generate CLI + change list from checked items</button></p>
 <h3>LINA / ASA CLI (reference)</h3><pre id=cli></pre><h3>Change list</h3><pre id=chg></pre>
 </section>
@@ -282,7 +282,7 @@ $('f').onsubmit=e=>{e.preventDefault();go(false)};$('rerun').onclick=()=>go(true
 let VIEW='gaps';
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>show(b.dataset.v));
 function show(v){VIEW=v;document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x.dataset.v==v));
-document.querySelectorAll('.view').forEach(s=>s.classList.toggle('hide',s.id!='v-'+v))}
+document.querySelectorAll('.view').forEach(s=>s.classList.toggle('hide',s.id!='v-'+v));if(v=='details')fitTbl()}
 function tbl(cols,rows){return '<div class=wrap><table><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr>'+rows.map(r=>'<tr>'+cols.map(c=>`<td>${esc(String(r[c]??''))}</td>`).join('')+'</tr>').join('')+'</table></div>'}
 const L=s=>(R&&R.labels&&R.labels[s])||s;
 function howto(){return (R.how_to_read||[]).length?'<details open><summary><b>How to read this</b></summary><dl class=howto>'+R.how_to_read.map(x=>`<dt>${esc(x.term)}</dt><dd>${esc(x.meaning)}</dd>`).join('')+'</dl></details>':''}
@@ -434,18 +434,23 @@ $('saveprof').onclick=()=>{const a=document.createElement('a');a.href=URL.create
 $('dl').onclick=()=>{const a=document.createElement('a');a.href='/api/report/'+R.session+'.html';a.download='fwsync-report.html';a.click()};
 // ---------- summary + tables
 function showSum(){const rows=R.summary.filter(r=>SUMC.some(c=>r[c]));
-$('summary').innerHTML='<h3>Summary per scope subnet</h3><div class=wrap><table><tr><th>scope</th><th>subnet</th>'+SUMC.map(c=>`<th>${c}</th>`).join('')+'</tr>'+
-rows.map(r=>`<tr><td>${esc(r.scope)}</td><td>${esc(r.subnet)}</td>`+SUMC.map(c=>`<td>${esc(Object.entries(r[c]||{}).map(x=>L(x[0])+' '+x[1]).join(', '))}</td>`).join('')+'</tr>').join('')+'</table></div>'+
+$('summary').innerHTML='<details id=sumd><summary><b>Summary per scope subnet</b></summary><div class=wrap><table><tr><th>scope</th><th>subnet</th>'+SUMC.map(c=>`<th>${c}</th>`).join('')+'</tr>'+
+rows.map(r=>`<tr><td>${esc(r.scope)}</td><td>${esc(r.subnet)}</td>`+SUMC.map(c=>`<td>${esc(Object.entries(r[c]||{}).map(x=>L(x[0])+' '+x[1]).join(', '))}</td>`).join('')+'</tr>').join('')+'</table></div></details>'+
 (R.planned.length?'<p class=warn>What-if items assumed on B: '+R.planned.map(p=>esc(p.item)).join('; ')+'</p>':'')}
+const CLIP=new Set(['scope','scopes','intersected_with','a_rules','detail','addresses','nat']);
+function fitTbl(){const t=$('tbl'),o=$('tbltop');if(!t.offsetParent)return;t.style.maxHeight=Math.max(320,innerHeight-Math.max(t.getBoundingClientRect().top,60)-14)+'px';
+o.firstChild.style.width=t.scrollWidth+'px';o.style.display=t.scrollWidth>t.clientWidth?'':'none'}
+$('tbltop').onscroll=()=>{$('tbl').scrollLeft=$('tbltop').scrollLeft};$('tbl').addEventListener('scroll',()=>{$('tbltop').scrollLeft=$('tbl').scrollLeft});
+$('tbl').addEventListener('click',e=>{const d=e.target.closest('.clip');if(d){d.classList.toggle('open');fitTbl()}});addEventListener('resize',fitTbl);$('summary').addEventListener('toggle',fitTbl,true);
 function draw(){const c=COLS[cur],rows=R[cur]||[];const showh=$('showhidden').checked;const rc=cur!='planned';
-let h='<table><tr><th><input type=checkbox id=all></th>'+(rc?'<th>row</th>':'')+(cur=='rules'||cur=='held_rules'?'<th>action</th>':'')+c.map(x=>`<th>${x}</th>`).join('')+'</tr><tr><th></th>'+(rc?'<th></th>':'')+(cur=='rules'||cur=='held_rules'?'<th></th>':'')+c.map((x,i)=>`<th><input data-i=${i} class=flt size=6></th>`).join('')+'</tr>';
+let h='<table><tr><th><input type=checkbox id=all></th>'+(rc?'<th>row</th>':'')+(cur=='rules'||cur=='held_rules'?'<th>action</th>':'')+c.map(x=>`<th>${x}</th>`).join('')+'</tr><tr class=ff><th></th>'+(rc?'<th></th>':'')+(cur=='rules'||cur=='held_rules'?'<th></th>':'')+c.map((x,i)=>`<th><input data-i=${i} class=flt size=6></th>`).join('')+'</tr>';
 rows.forEach((r,ri)=>{const st=(P.row_state||{})[r.key];if(st&&st.state=='not needed'&&!showh)return;
 const rn=(r.rule||'').split(' ∩ ')[0];const act=(P.rule_actions||{})[rn]||'';
 h+=`<tr class="${st?'st':''}" data-ri=${ri}><td>${r.id?`<input type=checkbox class=ck value="${esc(r.id)}" ${sel.has(r.id)?'checked':''}>`:''}</td>`+
 (rc?`<td><select class=rs><option value="">include</option><option ${st&&st.state=='exclude'?'selected':''}>exclude</option><option ${st&&st.state=='not needed'?'selected':''}>not needed</option></select>${st&&st.reason?'<div class=mut>'+esc(st.reason)+'</div>':''}</td>`:'')+
 (cur=='rules'||cur=='held_rules'?`<td>${rn?`<select class=ra><option value="">as config</option>${['permit','block','ignore'].map(x=>`<option ${x==act?'selected':''}>${x}</option>`).join('')}</select>`:''}</td>`:'')+
-c.map(x=>`<td ${x=='status'&&R.glossary&&R.glossary[r[x]]?'title="'+esc(R.glossary[r[x]])+'"':''} class="${x=='status'?'s-'+esc(String(r[x]).split(' ')[0].replace(',','')):''}">${esc(Array.isArray(r[x])?r[x].join(', '):(x=='status'?L(r[x]):r[x]))}</td>`).join('')+'</tr>'});
-$('tbl').innerHTML=h+'</table>';const off=(rc?1:0)+(cur=='rules'||cur=='held_rules'?1:0)+1;
+c.map(x=>{const v=esc(Array.isArray(r[x])?r[x].join(', '):(x=='status'?L(r[x]):r[x]));const cl=CLIP.has(x)&&v.length>120;return `<td ${x=='status'&&R.glossary&&R.glossary[r[x]]?'title="'+esc(R.glossary[r[x]])+'"':''} class="${x=='status'?'s-'+esc(String(r[x]).split(' ')[0].replace(',','')):''}">${cl?`<div class=clip title="Click to show all">${v}</div>`:v}</td>`}).join('')+'</tr>'});
+$('tbl').innerHTML=h+'</table>';fitTbl();const off=(rc?1:0)+(cur=='rules'||cur=='held_rules'?1:0)+1;
 document.querySelectorAll('.ck').forEach(x=>x.onchange=()=>x.checked?sel.add(x.value):sel.delete(x.value));
 document.querySelectorAll('.rs').forEach(s=>s.onchange=()=>{const r=rows[+s.closest('tr').dataset.ri];P.row_state=P.row_state||{};
 if(!s.value)delete P.row_state[r.key];else P.row_state[r.key]={state:s.value,reason:s.value=='not needed'?(prompt('Reason (optional)')||''):''};s.closest('tr').classList.toggle('st',!!s.value)});
