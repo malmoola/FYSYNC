@@ -46,6 +46,8 @@ def run(a_list, b, prof=None, parts=None):
     As = [load(t, n) for t, n in a_list]
     B = load(*b)
     B.pools = [IPSet.parse('%s-%s' % m) for m in re.findall(r'^ip local pool \S+ (\S+)-(\S+) mask', b[0], re.M)]
+    for cfg, (text, n) in zip(As, a_list):
+        cfg.pools = [IPSet.parse('%s-%s' % m) for m in re.findall(r'^ip local pool \S+ (\S+)-(\S+) mask', text, re.M)]
     apply_decisions(prof)
     roles_a = prof.roles_a or {}
     ign = ignore.ignored_names(prof) | {k for k, v in roles_a.items() if v == 'ignore'}
@@ -92,6 +94,12 @@ def run(a_list, b, prof=None, parts=None):
         for c in info['scope_candidates']:
             c['subnet'] = sitemap.map_prefix(c['subnet'], pairs)
     info['net_pairs'] = pairs
+    if len(a_list) == 1:
+        pp = sitemap.pool_pairs(sitemap.pools(a_list[0][0]), sitemap.pools(b[0]))
+        sitemap.translate_pools(A, pp)
+        info['pool_pairs'] = [(x['name'], y['name']) for x, y in pp]
+    B.ra_ifcs = re.findall(r'^ enable (\S+)', '\n'.join(re.findall(r'^webvpn\n((?: .*\n)+)', b[0], re.M))) + \
+        re.findall(r'^crypto ikev2 enable (\S+) client-services', b[0], re.M)
     for p, n in (prof.scope_add or {}).items():
         if p not in prof.scope:
             prof.scope.append(p)
@@ -131,8 +139,17 @@ def run(a_list, b, prof=None, parts=None):
         res.update(settings.build(a_list[0][0], b[0], A, B, prof, pairs, sitemap.edge_pairs(A, B, prof.interface_map, prof.outside_a),
                                   res.get('names', {'A': 'A', 'B': 'B'})))
         res['verdict'] = settings.verdict(res, res.get('names', {'A': 'A', 'B': 'B'}))
-    from . import runbook
+    from . import gapcheck, runbook
+    gapcheck.build(res, prof, A, B, info)
     runbook.build(res)
+    if len(a_list) == 1:
+        from . import gaplist
+        gaplist.build(res, prof, A, B, info, a_list[0][0], b[0])
+        gaplist.align_verdict(res)
+    from . import safety
+    safety.enforce(res, ('takeover', 'runbook', 'failback', 'plan', 'gaplist'), B=B)
+    if res['safety']['stripped']:
+        res['warnings'][0].append('safety: %d any-to-any permit line(s) stripped from the output' % res['safety']['stripped'])
     res['gaps_area'] = 'fmc' if 'fmc' in (A.vendor, B.vendor) or any(a.vendor == 'fmc' for a in As) else 'lina'
     res['known_gaps'] = gaps.ranked(res['gaps_area'])
     return res, A, B, prof

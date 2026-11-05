@@ -82,8 +82,9 @@ th,td{border:1px solid #d6dae2;padding:3px 6px;text-align:left;vertical-align:to
 .det td,.det th{font-size:12px}.flag{color:#a3141f}.small{color:#5b6474}.counts td{border:none;padding:1px 10px 1px 0}
 .map{background:#eef1f6;padding:6px 10px;border-radius:6px}.howto dt{font-weight:600}.howto dd{margin:0 0 6px 16px}
 .g-before{border-left:4px solid #a3141f}.g-during{border-left:4px solid #8a5a00}.g-check{border-left:4px solid #1f5fbf}
-.g-later,.g-unprovable{border-left:4px solid #9aa3b2}.reason{color:#5b6474;margin:2px 0 0}
+.g-later,.g-unprovable,.g-failback{border-left:4px solid #9aa3b2}.reason{color:#5b6474;margin:2px 0 0}
 input.f{width:100%;box-sizing:border-box}
+.gaps td pre{margin:0;font-size:12px;max-width:520px}
 @media (max-width:700px){body{margin:8px}.part b{display:block}}"""
 
 
@@ -111,12 +112,19 @@ def write_html(res, path, title='fwsync report'):
            '<p class=map>In this report <b>A = %s</b> (%s, the site that fails) and <b>B = %s</b> (%s, the site that '
            'takes over). Everywhere below they are called by these names. %d networks checked, mode %s.</p>' % (
                e(n['A']), e(res['a']['name']), e(n['B']), e(res['b']['name']), len(res['scope']), e(res.get('mode', '1:1')))]
+    if res.get('gaplist'):
+        out += gaplist_html(res)
+        out.append('<details class=adv><summary><h2 style="display:inline">Runbook, findings and plan (older view)'
+                   '</h2></summary><p class=small>The step-by-step view of the same compare. Its counts are its own '
+                   'items; the gap list above is the default view.</p>')
     out += howto_html(res)
     out += runbook_html(res)
     out += readiness_html(res)
     out += findings_html(res)
     out += decisions_html(res)
     out += plan_html(res)
+    if res.get('gaplist'):
+        out.append('</details>')
     from . import gaps
     out.append(gaps.html(res.get('gaps_area', 'all')))
     out.append('<details class=adv><summary><h2 style="display:inline">Details (advanced)</h2></summary>'
@@ -149,6 +157,46 @@ def write_html(res, path, title='fwsync report'):
     out.append("""<script>function flt(i){const t=i.closest('table'),c=[...t.rows[1].cells].map(x=>x.firstChild.value.toLowerCase());
 for(const r of [...t.rows].slice(2)){r.style.display=c.every((v,k)=>!v||r.cells[k].textContent.toLowerCase().includes(v))?'':'none'}}</script>""")
     Path(path).write_text('\n'.join(out), encoding='utf-8')
+
+
+GAP_REF = [('nat_ref', 'Every %(A)s NAT line, with %(B)s\'s first match', ['line', 'text', 'kind', 'result', 'b_match']),
+           ('rule_ref', 'Every %(A)s rule, with %(B)s\'s match', ['rule', 'lines', 'action', 'result', 'b_match']),
+           ('objects', 'Missing objects', ['name', 'type', 'value', 'status', 'used_by'])]
+
+
+def gaplist_html(res):
+    """the default view: gaps only, sorted by When then Gap; the counts are the rows"""
+    e = html.escape
+    g, n = res['gaplist'], res.get('names', {})
+    nm = {'A': n.get('A_short', 'A'), 'B': n.get('B_short', 'B')}
+    out = ['<h2>What %s is missing compared to %s</h2>' % (e(nm['B']), e(nm['A'])),
+           '<p class="verdict %s">%s</p>' % ('ok' if g['verdict']['ready'] else 'no', e(g['verdict']['text']))]
+    if g['counts']:
+        out.append(table(['When', 'Gaps'], [[w, c] for w, c in g['counts'].items()], 'counts'))
+    head = [t for k, t in g['cols']]
+    out.append('<div class=wrap><table class=gaps><tr>%s</tr>' % ''.join('<th>%s</th>' % e(h) for h in head))
+    for r in g['rows']:
+        cells = []
+        for k, t in g['cols']:
+            v = r.get(k, '')
+            cells.append('<td><pre>%s</pre></td>' % e('\n'.join(v)) if isinstance(v, list) else '<td>%s</td>' % e(str(v)))
+        out.append('<tr id=%s>%s</tr>' % (e(r['id']), ''.join(cells)))
+    out.append('</table></div>')
+    if not g['rows']:
+        out.append('<p class=small>No gaps.</p>')
+    out.append('<h3>At outage</h3>')
+    for c in g.get('outage', []):
+        out.append('<p><b>%s</b></p><ol>%s</ol>' % (e(c['case']), ''.join('<li>%s</li>' % e(x) for x in c['steps'])))
+    out.append('<h3>Review: %s allows more than %s (%d)</h3><p class=small>Not a gap: %s works for this traffic. Review '
+               'it with the rule owner.</p>' % (e(nm['B']), e(nm['A']), len(g['review']), e(nm['B'])))
+    if g['review']:
+        out.append(table(['rule', 'line', 'source', 'destination', 'service'],
+                         [[x['rule'], x['line'], x['src'], x['dst'], x['service']] for x in g['review']]))
+    for key, title, cols in GAP_REF:
+        rows = g.get(key, [])
+        out.append('<details><summary>%s (%d)</summary>%s</details>' % (
+            e(title % nm), len(rows), table(cols, [[x.get(c, '') for c in cols] for x in rows])))
+    return out
 
 
 def named_title(t, n):
@@ -190,6 +238,13 @@ def runbook_html(res):
             out.append('<details class="item g-%s"><summary><b>%d. %s</b> &middot; %s <span class=small>(%s)</span>'
                        '</summary>%s</details>' % (e(g['key']), i, e(it['subject']), e(it['reason']), e(it['kind']),
                                                    item_html(it)))
+    fb = res.get('failback') or []
+    out.append('<h3>Failback: undo every during-failover step (%d)</h3>' % len(fb))
+    if not fb:
+        out.append('<p class=small>Nothing here.</p>')
+    for i, it in enumerate(fb, 1):
+        out.append('<details class="item g-failback"><summary><b>%d. %s</b> &middot; %s</summary>%s</details>' % (
+            i, e(it['subject']), e(it['reason']), item_html(it)))
     return out
 
 
@@ -345,6 +400,19 @@ def write_all(res, outdir, prefix, mode=0o600):
                             ' | '.join(x['fix']['fmc']), ' | '.join(x['fix']['cli']), ' | '.join(x['verify']),
                             ' | '.join('%s:%s %s' % (v['device'], v['line'], v['text']) for v in x['evidence'])])
         paths.append(pp)
+    gl = res.get('gaplist')
+    if gl:
+        for name, rows, cols in (('gaplist', gl['rows'], [k for k, t in gl['cols']]),
+                                 ('nat_reference', gl['nat_ref'], ['line', 'text', 'kind', 'result', 'b_match']),
+                                 ('rule_reference', gl['rule_ref'], ['rule', 'lines', 'action', 'result', 'b_match']),
+                                 ('missing_objects', gl['objects'], ['name', 'type', 'value', 'status', 'used_by'])):
+            pp = str(Path(outdir) / ('%s_%s.csv' % (prefix, name)))
+            with open(pp, 'w', newline='', encoding='utf-8') as f:
+                w = csv.writer(f)
+                w.writerow(cols)
+                for r in rows:
+                    w.writerow([' | '.join(r[c]) if isinstance(r.get(c), list) else r.get(c, '') for c in cols])
+            paths.append(pp)
     p = str(Path(outdir) / ('%s_gaps.csv' % prefix))
     with open(p, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)

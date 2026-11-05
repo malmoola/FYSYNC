@@ -6,7 +6,7 @@ import re
 
 from .model import Interface, Nat, Route
 from .netset import IPSet
-from .compare import scope_split
+from .compare import block_name, scope_split
 
 UNKNOWN = 'unknown'          # L7 rule whose real action is not visible (suspect block name, not confirmed)
 L7BLOCK = 'l7block'          # L7 rule confirmed as block: permits nothing, denies nothing (its L7 condition is unknown)
@@ -19,7 +19,6 @@ def apply_rule_actions(cfg, prof, tag=''):
     """per-rule action override by rule name ('Name' or '<tag>:Name'); L7 rules whose name looks like a block
     become 'unknown' until confirmed. Returns the list of rules with a changed action."""
     acts = {k: v.lower() for k, v in (prof.rule_actions or {}).items()}
-    pat = re.compile(prof.l7_suspect) if prof.l7_suspect else None
     out = []
     for r in cfg.rules:
         name = r.rule_name or ''
@@ -32,7 +31,7 @@ def apply_rule_actions(cfg, prof, tag=''):
             r.action, r.override = (L7BLOCK if getattr(r, 'l7', False) else 'deny'), 'block'
         elif a == 'ignore':
             r.action, r.override = DROPPED, 'ignore'
-        elif pat is not None and getattr(r, 'l7', False) and r.action == 'permit' and name and pat.search(name):
+        elif prof.l7_suspect and getattr(r, 'l7', False) and r.action == 'permit' and block_name(name, prof.l7_suspect):
             r.action, r.override = UNKNOWN, 'suspect block name'
         else:
             continue

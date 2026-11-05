@@ -1,5 +1,231 @@
 # Changelog
 
+## 0.5.4 – 2026-11-04
+
+Remediation fixes that are safe to follow. A wrong fix is worse than no fix: where the tool cannot be sure, the item
+says what to check and gives no command.
+
+Wrong fixes:
+
+- Published servers: the proposed NAT and access rule use the interface the server is behind on B (A's real
+  interface mapped to B, or B's route for the address), never the generic inside interface. When neither is known,
+  the item is "Check first" with no NAT command.
+- An L7 rule that shows as any to any in LINA is never copied: "Compare in FMC: URL, application or geo conditions
+  are not visible", with a warning that copying it without its conditions would allow all traffic. It is never
+  copied, and counts as coverage only in the narrow case described under "Corrections from real configs".
+- Objects: an object B already has (by name or by value) is never created again. A B object with the same name and
+  another value is used as it is, never redefined, and the item says what to check. Translated addresses use B's
+  object for that address, not A's name.
+- Edit, not add: a B NAT for the server on the wrong interface, or a B rule with the same addresses on other zones,
+  is edited. Option `any` for a NAT that must work both before and after takeover. A zone that carries traffic from
+  the other site today is kept and the new zone added; a zone that carries nothing is replaced.
+
+False positives:
+
+- Inbound rules are judged per A rule, with its real source, ports and interfaces, not from an any source; the same
+  source list and ports on B is "same", not "partial".
+- Rule status follows first match on both sides: a block A has above the permit takes that traffic on A too, so an
+  equal B block before the permit is "same". Tunnel default rules (ipinip, 41, gre, teredo) are skipped.
+- Policy routing that only sends traffic to the ISP B's default route already uses needs no action (explained).
+- Reusing A's own public IP on B in a shared range, or two B NATs for the same server, is not a conflict.
+- Site twins (each site its own server and public IP on translated addresses) read "each site has its own"; no
+  conflict, no object to create, no DNS change.
+- "Rule cannot match" is optional cleanup when another rule carries the traffic or the source only exists at A.
+- No duplicate findings (a server published by object and manual NAT is one finding) and no item without an action.
+- Object differences use expanded values before and after site translation; a group that names A's own addresses
+  on purpose is "same".
+
+New checks:
+
+- NAT first match after takeover for each published server: a broader rule above the server's rule (for example an
+  identity NAT on any interface) is flagged; when it is needed today the fix is "Do during failover" with the exact
+  new interface and section.
+- B NATs (also dynamic PAT objects) whose real addresses are not behind their real interface.
+- Outbound PAT per ISP: A has it on each ISP, B on only some; B's existing PAT address for that ISP is reused.
+- NATs a shared network lacks that A has for it or that a sibling network has on B: inside users to public, VPN pool
+  to the network, VPN pool to public addresses, identity NAT. Reported only with the concrete rule to add.
+- FQDN rules are matched by object name (or FQDN) and port, and reported when A allows them above a block and B has
+  no match.
+- Copying a block lists the A allows above it that B lacks first, with a warning that the block alone would cut those
+  hosts off. The block is proposed disabled.
+- A block in a different place among the allow rules (above them on one side, below on the other).
+- Remote-access VPN interfaces are compared through the interface map, with each headend's interfaces and addresses.
+- Can't be proven: where FMC lives and whether it can deploy to B when A is lost (a go/no-go, also in the verdict),
+  and how the servers on shared networks start at B.
+- A B static route whose next hop is on no B subnet (not installed, so a public range is not advertised), with the
+  outbound PAT that depends on it.
+
+Corrections from real configs (regressions the first 0.5.4 tests missed):
+
+- L7 coverage: an L7 permit ip from a specific source zone to any, whose name does not suggest a block (a final
+  "allow all from inside"), counts as coverage again; every row it covers says "confirm in FMC". An L7 any-to-any
+  rule with no source zone or a block-like name is not coverage, and the same L7 rule on both sides is "same".
+- Block names: `_` and `-` separate words, so Block_X_to_Y is seen as a block. A rule whose name suggests a block is
+  never proposed as Action Allow: "Confirm the action in FMC", no CLI.
+- Any to any: an L7 rule whose any was narrowed by an ignored interface is still "Compare in FMC". A last check over
+  every finding, takeover step, runbook and failback item strips any permit whose source and destination are both
+  any, turns the item into "Compare in FMC" and counts it (`safety` in the result, and a warning).
+- Backhaul identity NAT: an identity NAT on B whose addresses are behind a shut interface is live today. It is a
+  "Do during failover" edit to the shut interface in After Auto NAT, with a failback step and the published servers
+  (auto and manual NATs below it) it would otherwise override.
+- NAT precedence: a rule is broader only if its addresses contain the server's. A host inside a server group is a
+  partial overlap, for review, with no reorder.
+- No `no nat` or replacement for a rule that may be live outside a proven during-failover change: the check item
+  gives show commands and the edit in words. A NAT for the VPN pool on the VPN interface is review only.
+- VPN pools: A's ip local pool maps to B's pool before the compare; new rules use B's pool object (or a new object
+  named after B's pool, with B's addresses), never A's pool.
+- Sibling NATs: no gap by analogy with an unrelated sibling network, and none when B has the same NAT for its own
+  twin of the subnet.
+- FQDN rules: L7 rules held as blocks by their name count as blocks below an FQDN allow, so the allow is a real gap
+  when B has no rule with that object and port.
+- A PAT rule on the wrong interface is one finding with one fix (edit it, keep B's translated address); no extra
+  "add PAT" or takeover item for it.
+- Add zone: when the new zone is still shut, the zone the rule uses today is kept, in the rule findings and in the
+  "source moves" check.
+- New public objects reuse A's object name; `dns` is kept on a NAT; standby fixes use A's standby address and B's
+  mask; "Published, no NAT" items say what to confirm, with the real addresses.
+- A config compared with itself (a healthy pair) gives no fixes: a B block equal to an A block above the rule is
+  skipped also when an ignored interface narrowed A's any, when the A block is on one interface and the rule on any,
+  and for published servers; PAT is not reported when B translates all that A does; a NAT check is not reported
+  when A has the same rule; a rule whose source A also routes elsewhere keeps A's interface; the reverse compare
+  leaves out addresses behind ignored A interfaces.
+- A rule walk that splits into too many address parts stops splitting (no more than 64), and skips rules that miss
+  all of what is left with one check.
+
+Gap list (the default view):
+
+- The report and the web UI open on one table of what B is missing compared to A, and nothing else: Gap, When,
+  Address, Object, A (line), B today (line), Required on B, Config. When is Now, Now disabled, At outage, Decision,
+  Confirm use, If route needed, Compare in FMC or Only if allow-listed. Rows sort by When, then Gap, and the verdict
+  counts are the rows. The runbook, findings and plan stay below as the older view. CSV: `*_gaplist.csv`.
+- NAT is a first-match walk, not a name or set match. Every active A NAT line is placed where its real subnet lives on
+  B (connected interfaces, also shut ones, then static routes, then the interface map, then inside) and walked through
+  B's NAT in real order: manual before auto, auto static first then longest prefix, manual after auto, with real and
+  mapped interfaces (also any) and destination-limited rules. Each line is OK same IP (also A's IP through B's dynamic
+  PAT), OK B public IP (never a gap), OK site device, Wrong source interface, Missing PAT, Missing static NAT, Missing
+  VPN NAT, Missing internal NAT, Missing NAT exemption, Change at outage or Hairpin PAT.
+- A catch-all PAT covers only the traffic that enters its interface. A NAT exemption is checked per CIDR and is a gap
+  only where B would translate that traffic; a destination-limited identity NAT on B covers it. NAT with destination
+  translation is real translation, never "no NAT".
+- A second walk with the proposed fixes applied reports the exemptions a fix makes necessary ("needed because of the
+  fix").
+- Change at outage: a B rule that is right today because the subnet's own interface is shut and the traffic arrives
+  through another one, and an identity NAT above B's static NATs, are steps at outage with their failback, not gaps
+  to fix now.
+- A static NAT with no inbound rule on A, whose traffic B's PAT (or a proposed PAT) translates, is "Only if
+  allow-listed".
+- NAT fixes: a rule on the wrong interface is edited, never added twice; a new PAT uses the address B's sibling
+  subnets use; a new static NAT reuses A's public IP when B already has NATs in that block (added disabled, enabled at
+  outage), and is otherwise a Decision with no placeholder object; a NAT that could answer ARP or change traffic today
+  is added disabled; a hairpin PAT is "Confirm use". A PAT inside a wider proposed PAT is not proposed again.
+- Rules, one result per A rule name: an L7 rule whose LINA line is broad is "Compare in FMC"; another L7 rule is
+  copied in FMC with its conditions and no LINA line; a Block* rule that shows permit is an L7 block, never covered,
+  shadowed or an allow, and is a Missing block placed below B's rules for the allows above it on A. Missing L4 blocks
+  have their objects and position. Addresses on B's rule but not on the zone where they live are "Wrong zone": add
+  the zone to the existing rule. Site twin rules match.
+- FQDN: an A FQDN allow is a gap when B has no rule naming that FQDN and B's first rule for the traffic is a block
+  (also an L7 block held by its name). The old check only looked for an A block below the A rule, never at B's rules,
+  so a block on B was missed although the known gaps said FQDN allows were reported.
+- "B allows more than A" is a review section, never a gap.
+- Other checks: OSPF "default-information originate always" on A is an outage item (with A's firewalls up and its
+  internet down, inside traffic keeps going to A). Both outage cases are listed (A's internet down with its firewalls
+  up: shut A's shared interfaces first; A's firewalls lost). B NAT lines that use a public block routed to A's ISP are
+  one dependency item with their count, which packet-tracer cannot prove.
+- Reference views: every A NAT line and every A rule name (also inactive rules and rules with no lines) with B's
+  match and the result, and the missing objects marked needed or not needed by what the gap list uses.
+- Safety: no output may hold an any-to-any permit, a Block* rule as an allow, a placeholder public object, or
+  `no nat` for a B rule that carries traffic today. The guard strips a live `no nat` from every output (the backhaul
+  identity step is now an FMC edit with show commands).
+
+Timing and safety:
+
+- Every fix is Fix before failover, Do during failover, Check on the firewall or Review later, by whether it could
+  change traffic that works today. A static route that would move live traffic is a during-failover step (routes
+  cannot be added disabled). A NAT that would change live traffic is created disabled, with an enable step in the
+  runbook.
+- A route lists the A NAT exemption it depends on, with B's state.
+- New Failback list: one step per during-failover change, in reverse order (report, web UI, JSON `failback`).
+- Test commands use a host whose NAT matches the claim (not one a more specific NAT catches) and state the expected
+  NAT; a test on a shut interface says it can run only after the interface is up.
+- Tests: tests/test_054 and tests/test_054b (28 cases for the corrections above, made-up names and documentation
+  addresses, each failing on the first 0.5.4 commit). Three test_054 cases follow the new rules: an L7 allow-all from a
+  zone is coverage (7c), a NAT check item gives show commands (15), a sibling-only NAT gap is not reported (17b).
+  tests/test_054c covers the gap list (one or more cases per numbered behaviour, plus a guard that fails on any
+  any-to-any permit, Block* allow, placeholder public object or live `no nat`). Three test_054b backhaul cases now
+  expect the FMC edit instead of `no nat` plus a new line.
+
+### Takeover compare, second round on the real pair
+
+- VPN NAT with destination translation is copied as A's rule: same section and options, source identity with B's
+  active pool (the pool a tunnel group hands out), and A's destination real and mapped objects. A's pool object is
+  never used on B.
+- A PAT with source interface any stays any on B, with B's active pool as one object (no split by B's rules, no
+  connected interface chosen). A PAT out of another interface than B's main path (its default route with the lowest
+  distance) is Confirm use. A's VPN pool traffic is taken to enter on A's VPN interface.
+- A's NAT options are copied (dns, destination static, unidirectional, no-proxy-arp, route-lookup), and none are
+  added: exemptions no longer get no-proxy-arp and route-lookup when A's line has neither.
+- A B static with real and mapped interface any is no longer B's own choice when B exempts the same traffic toward
+  its other shared interfaces: the Missing NAT exemption is reported for the interface that lacks it, with B's source
+  group.
+- An L7 Block* rule on A's site interface is equal to B's block on the mapped interface when B's rule is named the same
+  way with the site mapping and has the same LINA line on the mapped zones (also any to any); it is not listed under
+  Compare in FMC.
+- Block position text is true: a B rule is said to carry an A allow only when that A allow is above the block in A's
+  order and takes some of its traffic, and the allow is named with its line. The block goes above the first B allow
+  that lets any of its traffic through (and so above the broad allow after it).
+- A copied "destination static" keeps B's object of the same name (an any-network object stays that object, never the
+  keyword any), else uses B's object with the same value, else adds the object in the row's config.
+- Route rows carry route commands only; the NAT a route depends on is judged by the NAT walk.
+- The NAT reference result no longer depends on set order when two results tie.
+- Docs: shared interfaces and the unreachable-address assumption are described in the README and known gaps.
+
+### Takeover compare on a real pair (A primary, B takes over)
+
+Root causes found by comparing one real pair end to end; every fix is general logic with a synthetic test
+(tests/test_054d.py).
+
+- Shared interfaces are chosen by identical IP address and subnet on both firewalls where B's copy is shut until
+  takeover. Only those are shut in the "internet down, firewalls up" steps (and brought up on B). The same addresses
+  up on both firewalls are two separate site networks.
+- "Not hit on A": when A learns routes (OSPF, BGP) a line is no longer cleared by A's static routes; only A's
+  connected subnets and an earlier A line that takes the traffic first count. The gap list stats count the lines
+  that still use this result.
+- A wrong-interface PAT is one row on the PAT line. A static NAT for a host in that subnet stays its own row: Missing
+  static NAT when A has an inbound rule for it, else "Only if allow-listed".
+- A B static for the same host and public IP on another interface is a Change at outage that edits that rule, never
+  a second rule.
+- An identity NAT on B moves at outage only when it takes traffic to a static's public IP (destination any, the
+  static's address inside it). Identity NATs with a specific destination are left alone.
+- Source "any" is the traffic entering that real interface; it is no longer expanded into A's routed subnets, which
+  could include outside or public B blocks.
+- Rules: coverage ignores rule names (same or broader addresses and ports on the mapped zones). A rule only B has
+  gives Wrong zone only when an A rule B does not carry today needs that zone.
+- FQDN allows: an FQDN object written "fqdn [v4] NAME id N" is read correctly, and its ACE lines are no longer dropped
+  when an interface is ignored. Every line is compared; a B block that would stop one gives one Missing allow,
+  positioned above that block. An any-to-any L7 block (URL categories) cannot prove it stops the traffic.
+- L7 Block* rules match only a B block on the same mapped zones that holds their addresses and ports; one that is any
+  to any in LINA is "Compare in FMC" unless B has the same rule with the same lines.
+- Blocks are placed above B's first rule that would allow their traffic, below the narrower B rules carrying allows A
+  has above the block. The report never says to add an A allow first. Assumption: a B block that lacks only private or
+  shared address space B's config sends only out of its outside default route (and no crypto map) is equal; B can
+  learn routes dynamically that the config does not show (listed in the known gaps).
+- New NAT brings the A exemptions above it (second pass, also for internal and reused static NATs). A NAT or
+  exemption whose real interface is shut on B, or that could answer ARP, is "Now disabled".
+- One row per A line and interface pair: an exemption that splits into CIDRs and B lines is one row, above the
+  first B line it needs to precede ("the proposed rule" for a proposed one; no "line 0").
+- An exemption whose destination A routes with its own static route and B routes another way is "If route needed".
+  An exemption or internal NAT to any is compared for the networks B routes out of that interface, so a B NAT
+  limited to the group of all inside networks covers a destination-any NAT on A.
+- A public IP in a block where B has a single isolated NAT line is a Decision with no NAT command (two or more B lines
+  show that the block moves with B).
+- Site devices ("OK, site device"): NATs that only reach the ISP edge or gateway, statics whose only inbound rules
+  come from the edge routers (and lines that share their public IP), public IPs in B's own block, hosts whose B twin
+  in the same rules has its own public NAT, and exemption parts caught by B's own static NAT for a host A has no NAT
+  for. A subnet B reaches through an interface of its own is B's site network.
+- Scanner and other L7 rows for a rule B has on fewer zones say which zone to add. Inbound rules to a host whose
+  public IP is a decision are a Decision row.
+- The top verdict is the gap list's; the older runbook keeps its items and its own text (verdict.runbook_text).
+
 ## 0.5.3 – 2026-11-03
 
 Takeover check: can B carry the traffic when A fails.

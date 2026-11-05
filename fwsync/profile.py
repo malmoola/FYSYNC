@@ -26,7 +26,7 @@ class Profile:
     roles_a: Dict[str, str] = field(default_factory=dict)        # A nameif -> outside | inside | chain link | ignore
     whatif: Dict[str, list] = field(default_factory=dict)        # planned on B: routes, public, interfaces, nat_pools
     rule_actions: Dict[str, str] = field(default_factory=dict)   # rule name -> permit | block | ignore
-    l7_suspect: str = r'(?i)\b(block|blocklist|blocked|deny|drop|unwanted)\b|trojan|stratum miner'
+    l7_suspect: str = r'(?i)\b(block|blocklist|blocked|deny|denied|drop|reject|unwanted)\b|trojan|stratum miner'
     row_state: Dict[str, Dict[str, str]] = field(default_factory=dict)
     names: Dict[str, str] = field(default_factory=dict)          # A / B / A1 / A2 display names, e.g. "Edge (FW-A)"
     finding_state: Dict[str, Dict[str, str]] = field(default_factory=dict)   # finding key -> {state: fix|not needed|later, reason}

@@ -1,27 +1,97 @@
 """Compare engine: A vs B by value (address/port sets), first-match rule semantics on B.
 Both directions in one run: A -> B (what B is missing) and B -> A (what B has or allows beyond A)."""
 import ipaddress
+import re
+
 from . import natorder
 from .netset import IPSet, Service
 
 PERMIT = ('permit', 'trust', 'allow', 'fastpath')
 L7 = 'L7 rule: LINA shows permit, Snort applies the real action (check FMC)'
-ORDER = ['covered', 'partial', 'shadowed', 'denied', 'missing']
+ORDER = ['covered', 'not compared (FQDN)', 'compare in FMC', 'partial', 'shadowed', 'denied', 'missing']
+TUNNEL_PROTOS = ('ipinip', '41', 'gre', '4', '47')
+MAX_CUBES = 32
+MAX_FRAG = 64            # past this many (src, dst) parts a walk only drops parts a rule holds whole, never splits
+SUSPECT = r'(?i)\b(block|blocklist|blocked|deny|denied|drop|reject|unwanted)\b|trojan|stratum miner'
+CONFIRM = 'confirm in FMC'
+
+
+def block_name(name, pat=None):
+    """the rule name suggests a block. '_' and '-' separate words, so Block_X_to_Y and Deny-Social count"""
+    return bool(name) and re.search(pat or SUSPECT, re.sub(r'[_\-]+', ' ', name)) is not None
+
+
+def _any_side(s, ref):
+    """any, also when an ignored interface narrowed A's copy of any (the rule still says any)"""
+    return s.is_any() or (ref or '').split(' ')[0] in ('any', 'any4')
+
+
+def tunnel_default(r):
+    """FTD prefilter tunnel defaults (ipinip, 41, gre, teredo from any to any): they match the encapsulation, not the
+    traffic inside it, so they are never compared"""
+    if 'DEFAULT TUNNEL' in (r.rule_name or '').upper():
+        return True
+    if not (r.src.is_any() and r.dst.is_any()) or not r.svc.items:
+        return False
+    return all(p in TUNNEL_PROTOS or (p == 'udp' and repr(s) == '3544') for p, d, s in r.svc.items)
+
+
+def l7_any(r):
+    """an L7 rule that shows as any to any in LINA: its URL, application or geo conditions are only in FMC, so it is
+    never copied and never a match (only l7_cover rules count as coverage)"""
+    return getattr(r, 'l7', False) and _any_side(r.src, r.src_ref) and _any_side(r.dst, r.dst_ref)
+
+
+def any_any(r):
+    """source and destination are both any: never copied, whatever the rule type"""
+    return _any_side(r.src, r.src_ref) and _any_side(r.dst, r.dst_ref)
+
+
+def l7_cover(r):
+    """an L7 any-to-any permit that still counts as coverage: permit ip from a specific source zone, with a name that
+    does not suggest a block (a final 'allow all from inside'). What it covers is marked 'confirm in FMC'"""
+    return l7_any(r) and r.action in PERMIT and r.svc.is_any() and bool(r.src_ifc) and \
+        not block_name(r.rule_name) and getattr(r, 'override', '') != 'suspect block name'
 
 
 def effective_rules(cfg):
     """Rules that are applied: ACLs bound by access-group (interface ACLs get their ingress nameif),
-    or CSM_FW_ACL_ when there is no access-group line."""
+    or CSM_FW_ACL_ when there is no access-group line. Tunnel default rules are left out."""
     out = []
     groups = cfg.access_groups or {'CSM_FW_ACL_': 'global'}
     for r in cfg.rules:
-        if r.inactive or r.acl not in groups or r.action in ('unknown', 'l7block', 'ignore'):
+        if r.inactive or r.acl not in groups or r.action in ('unknown', 'l7block', 'ignore') or tunnel_default(r):
             continue
         g = groups[r.acl].split()
         if g and g[0] == 'in' and len(g) >= 3 and r.src_ifc is None:
             r.src_ifc = g[2]
         out.append(r)
     return out
+
+
+def fqdn_names(cfg, r):
+    """{'src': [...], 'dst': [...]}: FQDN objects (or groups holding one) the rule names on each side"""
+    out = {}
+    for side in ('src', 'dst'):
+        names = getattr(r, side + '_names', None) or []
+        hit = [n for n in names if _has_fqdn(cfg, n)]
+        if hit:
+            out[side] = hit
+    return out
+
+
+def _has_fqdn(cfg, name, seen=()):
+    o = cfg.objects.get(name)
+    if o is None or name in seen:
+        return False
+    if o.kind == 'fqdn':
+        return True
+    return o.kind == 'group' and any(m.startswith('obj:') and _has_fqdn(cfg, m[4:], seen + (name,)) for m in o.members)
+
+
+def fqdn_value(cfg, name):
+    o = cfg.objects.get(name)
+    return o.value if o is not None and o.kind == 'fqdn' else ''
 
 
 def _ifc_ok(b_ifc, want):
@@ -38,11 +108,15 @@ def _is_default(r):
         r.src_ifc is None and r.dst_ifc is None
 
 
-def _sub(cubes, S, D):
+def _sub(cubes, S, D, split=True):
     out = []
     for s, d in cubes:
         if not (s.overlaps(S) and d.overlaps(D)):
             out.append((s, d))
+            continue
+        if not split:
+            if not (s.issubset(S) and d.issubset(D)):
+                out.append((s, d))
             continue
         a = s - S
         if a:
@@ -53,19 +127,32 @@ def _sub(cubes, S, D):
     return out
 
 
-def eval_slice(b_rules, src_ifc, dst_ifc, src, dst, svc):
+def _hull(cubes):
+    """all sources and all destinations of the parts still to check: a cheap test before the part-by-part one"""
+    su, du = IPSet(), IPSet()
+    for s, d in cubes:
+        su, du = su | s, du | d
+    return su, du
+
+
+def eval_slice(b_rules, src_ifc, dst_ifc, src, dst, svc, skip=(), cubes=None):
     """First-match walk of B for traffic (src_ifc,dst_ifc,src,dst,svc). src_ifc/dst_ifc False = ignore interfaces.
-    Returns (status, matched B rules, detail)."""
-    cubes = [(src, dst)]
+    skip: ids of B rules to leave out (blocks that equal a block the A side has above the rule). cubes: the
+    (src, dst) parts still to check, when an earlier A block already took some. Returns (status, matched B rules,
+    detail)."""
+    cubes = list(cubes) if cubes is not None else [(src, dst)]
     permits, denies = [], []
+    su, du = _hull(cubes)
     for r in b_rules:
+        if id(r) in skip or (l7_any(r) and r.action in PERMIT and not l7_cover(r)):
+            continue
         m1, f1 = _ifc_ok(r.src_ifc, src_ifc)
         m2, f2 = _ifc_ok(r.dst_ifc, dst_ifc)
         if not (m1 and m2):
             continue
-        if not any(s.overlaps(r.src) and d.overlaps(r.dst) for s, d in cubes):
+        if not svc.overlaps(r.svc) or not (su.overlaps(r.src) and du.overlaps(r.dst)):
             continue
-        if not svc.overlaps(r.svc):
+        if len(cubes) > 1 and not any(s.overlaps(r.src) and d.overlaps(r.dst) for s, d in cubes):
             continue
         full_svc = svc.covered_by(r.svc)
         if _is_default(r):
@@ -73,13 +160,14 @@ def eval_slice(b_rules, src_ifc, dst_ifc, src, dst, svc):
         if r.action in PERMIT:
             permits.append(r)
             if full_svc and f1 and f2:
-                cubes = _sub(cubes, r.src, r.dst)
+                cubes = _sub(cubes, r.src, r.dst, len(cubes) <= MAX_FRAG)
         else:
             denies.append(r)
             if full_svc:
-                cubes = _sub(cubes, r.src, r.dst)
+                cubes = _sub(cubes, r.src, r.dst, len(cubes) <= MAX_FRAG)
         if not cubes:
             break
+        su, du = _hull(cubes)
     remaining = sum(s.size() * d.size() for s, d in cubes)
     if not permits:
         return ('denied' if denies else 'missing'), denies, 'no B permit'
@@ -89,6 +177,47 @@ def eval_slice(b_rules, src_ifc, dst_ifc, src, dst, svc):
     if first_deny_before:
         return 'shadowed', denies[:1] + permits, 'earlier B deny %s' % (denies[0].rule_name or denies[0].seq)
     return 'partial', permits + denies, 'not all traffic or services permitted'
+
+
+def a_blocks_above(a_rules, r, index=None):
+    """A blocks above permit r that overlap it: on A they take that traffic first. A block on one interface still
+    takes part of a rule on any interface (only blocks that cover r's interfaces remove traffic from it). index:
+    [(position, block)] of a_rules, to skip the permits"""
+    out = []
+    pos = index.get(id(r)) if index else None
+    blocks = index['blocks'] if index else list(enumerate(a_rules))
+    for i, d in blocks:
+        if (pos is not None and i >= pos) or d is r:
+            break
+        if d.action in PERMIT or _is_default(d) or (r.src_ifc is not None and d.src_ifc not in (None, r.src_ifc)) or \
+                (r.dst_ifc is not None and d.dst_ifc not in (None, r.dst_ifc)):
+            continue
+        if d.src.overlaps(r.src) and d.dst.overlaps(r.dst) and d.svc.overlaps(r.svc):
+            out.append(d)
+    return out
+
+
+def block_index(a_rules):
+    idx = {id(r): i for i, r in enumerate(a_rules)}
+    idx['blocks'] = [(i, r) for i, r in enumerate(a_rules) if r.action not in PERMIT and not _is_default(r)]
+    return idx
+
+
+def same_blocks(b_rules, a_blocks, prof):
+    """ids of B blocks that block nothing more than an A block above the rule: both sides drop that traffic first. A's
+    any narrowed by an ignored interface is still any"""
+    out = set()
+    for x in b_rules:
+        if x.action in PERMIT or _is_default(x):
+            continue
+        for d in a_blocks:
+            si, di = prof.map_ifc(d.src_ifc), prof.map_ifc(d.dst_ifc)
+            if (d.src_ifc is None or x.src_ifc == si) and (d.dst_ifc is None or x.dst_ifc == di) and \
+                    (x.src.issubset(d.src) or _any_side(d.src, d.src_ref)) and \
+                    (x.dst.issubset(d.dst) or _any_side(d.dst, d.dst_ref)) and x.svc.covered_by(d.svc):
+                out.add(id(x))
+                break
+    return out
 
 
 BROAD = 2 ** 24          # a side covering a /8 or more ("any") does not reference a subnet specifically
@@ -117,38 +246,100 @@ def _slices(r, scope):
     return out
 
 
-def _b_path(r, B, prof):
+def _b_path(r, B, prof, A=None):
     """interfaces this traffic uses on B: the mapped ones, unless B routes the addresses elsewhere (Azure sits behind
-    a tunnel on B and behind inside on A)"""
+    a tunnel on B and behind inside on A). When A itself routes them away from the rule's interface, the rule is
+    kept as A has it"""
     from .detect import specific_ifc
     si, di = prof.map_ifc(r.src_ifc), prof.map_ifc(r.dst_ifc)
 
-    def real(ifc, addrs):
+    def real(ifc, addrs, a_ifc):
         i = B.interfaces.get(ifc)
-        return ifc if not ifc or i is None or i.planned else (specific_ifc(B, addrs) or ifc)
-    return real(si, r.src), real(di, r.dst)
+        if not ifc or i is None or i.planned:
+            return ifc
+        if A is not None and a_ifc and specific_ifc(A, addrs) not in (None, a_ifc):
+            return ifc
+        return specific_ifc(B, addrs) or ifc
+    return real(si, r.src, r.src_ifc), real(di, r.dst, r.dst_ifc)
 
 
 def compare_rules(A, B, prof):
+    """each A permit in scope, judged by first match on both sides: A blocks above it take their traffic first, and a
+    B block equal to one of them is not a difference. L7 any-to-any rules are not compared; FQDN rules are matched by
+    object name and port"""
     scope = prof.scope_set()
     b_rules = effective_rules(B)
+    a_rules = effective_rules(A)
+    a_held = held_blocks(A)
+    bidx = block_index(a_rules)
     out = []
-    for r in effective_rules(A):
+    for r in a_rules:
         if r.action not in PERMIT:
             continue
         slices = _slices(r, scope)
+        fq = fqdn_names(A, r)
+        if not slices and fq and (r.src.overlaps(scope) or r.dst.overlaps(scope)):
+            slices = [('fqdn', r.src, r.dst)]
         if not slices:
             continue
-        si, di = _b_path(r, B, prof)
-        results = []
-        for label, s, d in slices:
-            st, matched, det = eval_slice(b_rules, si, di, s, d, r.svc)
-            results.append((label, st, matched, det))
+        si, di = _b_path(r, B, prof, A)
+        results, other = [], None
+        if l7_any(r):
+            same = [x for x in b_rules if l7_any(x) and x.action in PERMIT and x.src_ifc == si and x.dst_ifc == di
+                    and repr(x.svc.items) == repr(r.svc.items) and (x.rule_name or '') == (r.rule_name or '')]
+            results = [(label, 'covered', same[:1], 'same L7 rule on B (any to any): %s that its conditions match' %
+                        CONFIRM) if same else (label, 'compare in FMC', [], 'L7 rule shows as any to any in this config')
+                       for label, s, d in slices]
+        elif fq:
+            results = [(slices[0][0],) + _fqdn_status(A, B, a_rules, b_rules, r, fq, a_held)]
+        else:
+            parts = []
+            pre, skip = None, None
+            for label, s, d in slices:
+                st = eval_slice(b_rules, si, di, s, d, r.svc)
+                if st[0] != 'covered':
+                    pre = a_blocks_above(a_rules, r, bidx) if pre is None else pre
+                cubes = [(s, d)]
+                if st[0] != 'covered' and pre:
+                    for x in pre if len(s.iv) + len(d.iv) <= MAX_CUBES else ():
+                        if not cubes:
+                            break
+                        if r.svc.covered_by(x.svc) and len(x.src.iv) + len(x.dst.iv) <= MAX_CUBES and \
+                                x.src_ifc in (None, r.src_ifc) and x.dst_ifc in (None, r.dst_ifc):
+                            nxt = _sub(cubes, x.src, x.dst)
+                            if len(nxt) > MAX_CUBES:
+                                break               # too fragmented to follow: equal B blocks are still skipped
+                            cubes = nxt
+                    if not cubes:
+                        results.append((label, 'covered', [], 'never reached on A: an earlier A block takes it'))
+                        continue
+                    if st[0] in ('shadowed', 'partial', 'denied'):
+                        skip = same_blocks(b_rules, pre, prof) if skip is None else skip
+                        st = eval_slice(b_rules, si, di, s, d, r.svc, skip, cubes)
+                parts.append((label, s, d, cubes))
+                results.append((label,) + st)
+            if parts and any(x[1] in ('missing', 'partial') for x in results):
+                twins = [x for x in b_rules if x.action not in PERMIT or specific_twin(r.src, r.dst, x)]
+                alt = [eval_slice(twins, False, False, s, d, r.svc, skip or (), cubes) for label, s, d, cubes in parts]
+                if all(a[0] == 'covered' for a in alt):
+                    other = [m for a in alt for m in a[1] if m.src_ifc != si or m.dst_ifc != di]
         worst = max(results, key=lambda x: ORDER.index(x[1]))
+        position = ''
+        if worst[1] == 'shadowed' and worst[2]:
+            den = worst[2][0]
+            below = next((x for x in a_rules[a_rules.index(r) + 1:] if x.action not in PERMIT and not _is_default(x)
+                          and den.src.issubset(x.src) and den.dst.issubset(x.dst) and den.svc.covered_by(x.svc)), None)
+            if below is not None:
+                position = 'On A, the same block "%s" sits below this rule; on B, "%s" sits above it.' % (
+                    below.rule_name or below.seq, den.rule_name or den.seq)
         twin = _same_on_b(r, b_rules, si, di)
         if twin is not None and worst[1] == 'partial':
             results = [(label, 'covered', [twin], 'same rule on B') for label, s, d in slices]
             worst = results[0]
+        l7c = [m for x in results for m in x[2] if l7_cover(m)]
+        if worst[1] == 'covered' and l7c and CONFIRM not in worst[3]:
+            worst = (worst[0], worst[1], worst[2], 'covered by L7 rule "%s" (any to any from %s): %s that its '
+                     'conditions allow this traffic' % (l7c[0].rule_name or l7c[0].seq, l7c[0].src_ifc, CONFIRM))
         out.append({
             'id': 'R%d' % r.seq, 'path': getattr(r, 'path', ''), 'policy': r.policy, 'rule': r.rule_name, 'rule_id': r.rule_id,
             'action': r.action, 'src_ifc': r.src_ifc or 'any', 'dst_ifc': r.dst_ifc or 'any',
@@ -158,10 +349,55 @@ def compare_rules(A, B, prof):
             'scopes_any': scope_split(prof, r.src, r.dst)[1],
             'direction': ' + '.join(x[0] for x in results), 'status': worst[1],
             'detail': worst[3], 'l7': getattr(r, 'l7', False), 'action_check': _action_check(r),
+            'confirm_fmc': worst[1] == 'covered' and CONFIRM in worst[3], 'block_name': block_name(r.rule_name),
             'b_rules': sorted({'%s %s' % (m.rule_name or m.rule_id or '', '#%d' % m.seq) for x in results for m in x[2]})[:8],
-            'line': r.line, '_rule': r, '_b': [m for x in results for m in x[2]][:8],
+            'line': r.line, '_rule': r, '_b': [m for x in results for m in x[2]][:8], 'fqdn': fq,
+            '_b_other': other if other and worst[1] in ('missing', 'partial') else [], 'position': position,
         })
     return _merge_origin(out, prof.scope_names)
+
+
+def specific_twin(src, dst, x):
+    """B rule x names this traffic as specifically as A does (it is the same rule, perhaps on other zones), not a
+    broad any or /8 rule that happens to cover it"""
+    for a, b in ((src, x.src), (dst, x.dst)):
+        if not a.is_any() and (b.is_any() or b.size() >= BROAD or not a.issubset(b)):
+            return False
+    return True
+
+
+def held_blocks(cfg):
+    """rules left out of the compare because their name suggests a block (L7 rules show permit in LINA): they are
+    still blocks for the FQDN position check"""
+    groups = cfg.access_groups or {'CSM_FW_ACL_': 'global'}
+    return [r for r in cfg.rules if not r.inactive and r.acl in groups and r.action in ('unknown', 'l7block')
+            and (r.action == 'l7block' or block_name(r.rule_name))]
+
+
+def _fqdn_status(A, B, a_rules, b_rules, r, fq, held=()):
+    """FQDN objects have no addresses in a config: a B permit naming the same FQDN object (by name or by FQDN) with
+    the ports covered is the same rule. Without one, it is a gap only when an A block below the rule (also an L7
+    rule held as a block by its name) would take that traffic: (status, matched B rules, detail)"""
+    want = {side: set(names) | {fqdn_value(A, n) for n in names if fqdn_value(A, n)} for side, names in fq.items()}
+    for x in b_rules:
+        if x.action not in PERMIT:
+            continue
+        xf = fqdn_names(B, x)
+        if not all(want[side] & (set(xf.get(side, [])) | {fqdn_value(B, n) for n in xf.get(side, [])}) for side in fq):
+            continue
+        rest = [side for side in ('src', 'dst') if side not in fq]
+        if any(not getattr(r, side).issubset(getattr(x, side)) for side in rest) or not r.svc.covered_by(x.svc):
+            continue
+        return 'covered', [x], 'same FQDN rule on B'
+    blocks = [d for d in a_rules if d.action not in PERMIT and not _is_default(d)] + list(held)
+    below = sorted([d for d in blocks if d.seq > r.seq and d.svc.overlaps(r.svc) and d.src_ifc in (None, r.src_ifc)
+                    and d.dst_ifc in (None, r.dst_ifc) and ('src' in fq or r.src.overlaps(d.src))
+                    and ('dst' in fq or r.dst.overlaps(d.dst))], key=lambda d: d.seq)
+    names = ', '.join(n for v in fq.values() for n in v)
+    if below:
+        return 'missing', [], 'FQDN rule above A block "%s"; B has no rule for %s' % (
+            below[0].rule_name or below[0].seq, names)
+    return 'not compared (FQDN)', [], 'FQDN rule %s: no A block below it, B may allow it with a broader rule' % names
 
 
 def _action_check(r):
@@ -221,9 +457,11 @@ def _merge_origin(rows, names=None):
 
 
 def compare_rules_reverse(A, B, prof):
-    """B -> A: every B permit in scope, checked against A by address and service (interfaces ignored)"""
+    """B -> A: every B permit in scope, checked against A by address and service (interfaces ignored). Addresses
+    behind an ignored A interface are left out: A's rules were narrowed there on purpose"""
     scope = prof.scope_set()
     a_rules = effective_rules(A)
+    ign = getattr(A, '_ignored_set', None) or IPSet()
     names = {'covered': 'also on A', 'partial': 'over-permitted (partial)', 'shadowed': 'over-permitted (partial)',
              'denied': 'over-permitted', 'missing': 'over-permitted'}
     out = []
@@ -235,12 +473,13 @@ def compare_rules_reverse(A, B, prof):
             continue
         cubes = []
         for label, s, d in slices:
-            cubes += _crossing(A, s, d)
+            cubes += [(x - ign, y - ign) for x, y in _crossing(A, s, d)]
+        cubes = [(x, y) for x, y in cubes if x and y]
         if not cubes:
             continue
         results = [eval_slice(a_rules, False, False, s, d, r.svc) for s, d in cubes]
         worst = max(results, key=lambda x: ORDER.index(x[0]))
-        twin = _same_on_a(r, a_rules, prof)
+        twin = _same_on_a(r, a_rules, prof, ign)
         if twin is not None:
             worst = ('covered', [twin])
             results = [worst]
@@ -267,36 +506,58 @@ def _same_addr(a, b, a_ref, b_ref):
     return a == b or a_ref == b_ref == 'any'
 
 
-def _same_on_a(r, a_rules, prof):
-    """the A permit with the same mapped interfaces, addresses and service: B allows nothing more with this rule"""
+def _same_on_a(r, a_rules, prof, ign=None):
+    """the A permit with the same mapped interfaces, addresses and service: B allows nothing more with this rule.
+    ign: addresses behind ignored A interfaces, left out of A's rules on purpose"""
+    ign = ign or IPSet()
+    rs, rd = r.src - ign, r.dst - ign
     for a in a_rules:
         if a.action in PERMIT and prof.map_ifc(a.src_ifc) == r.src_ifc and prof.map_ifc(a.dst_ifc) == r.dst_ifc \
-                and _same_addr(a.src, r.src, a.src_ref, r.src_ref) and _same_addr(a.dst, r.dst, a.dst_ref, r.dst_ref) \
+                and _same_addr(a.src, rs, a.src_ref, r.src_ref) and _same_addr(a.dst, rd, a.dst_ref, r.dst_ref) \
                 and repr(a.svc.items) == repr(r.svc.items):
             return a
     return None
 
 
 def compare_firewide(A, B, prof):
-    """checks that do not depend on the scope: A blocks with no equal on B, published A addresses with no B NAT, and
-    B rules whose source is not behind their source interface"""
-    from .detect import route_split
+    """checks that do not depend on the scope: A blocks with no equal on B (with the A allows above them that B lacks),
+    blocks whose place among the allows differs, published A addresses with no B NAT, and B rules whose source is not
+    behind their source interface"""
     from .netset import is_public
     out = []
     b_rules, a_rules = effective_rules(B), effective_rules(A)
     b_denies = [r for r in b_rules if r.action == 'deny' and not (r.src.is_any() and r.dst.is_any() and r.src_ifc is None)]
-    seen = {}
+    seen, equal = {}, []
     for r in a_rules:
         if r.action != 'deny' or (r.src.is_any() and r.dst.is_any() and r.src_ifc is None and r.dst_ifc is None):
             continue
         si, di = prof.map_ifc(r.src_ifc), prof.map_ifc(r.dst_ifc)
-        ok = any(x.src_ifc in (None, si) and x.dst_ifc in (None, di) and r.src.issubset(x.src) and r.dst.issubset(x.dst)
-                 and repr(x.svc.items) == repr(r.svc.items) for x in b_denies)
-        if not ok:
+        same = next((x for x in b_denies if x.src_ifc in (None, si) and x.dst_ifc in (None, di) and r.src.issubset(x.src)
+                     and r.dst.issubset(x.dst) and repr(x.svc.items) == repr(r.svc.items)), None)
+        if same is None:
             seen.setdefault(r.rule_name or r.rule_id or r.line, []).append(r)
+        else:
+            equal.append((r, same))
     for name, rs in seen.items():
+        deps = dependent_allows(a_rules, b_rules, rs, prof)
         out.append({'id': 'FW-D-%s' % name, 'check': 'A block missing on B', 'status': 'missing', 'item': name,
-                    'detail': '%d line(s), e.g. %s' % (len(rs), rs[0].line), 'line': getattr(rs[0], 'lineno', 0)})
+                    'detail': '%d line(s), e.g. %s' % (len(rs), rs[0].line) + (
+                        '; A allows above it that B lacks: %s' % ', '.join(d['rule'] for d in deps) if deps else ''),
+                    'line': getattr(rs[0], 'lineno', 0), 'deps': deps, '_rules': rs})
+    done = set()
+    for d, x in equal:
+        name = d.rule_name or d.rule_id or d.line
+        diff = position_diff(a_rules, b_rules, d, x, prof)
+        if diff and name not in done:
+            done.add(name)
+            q = diff[0]
+            out.append({'id': 'FW-P-%s' % name, 'check': 'Rule position differs', 'status': 'position', 'item': name,
+                        'detail': 'A has block "%s" above its allow rules; on B the same block "%s" sits below allow rule '
+                                  '"%s" (line %s), so B allows %s -> %s (%s) that A blocks' % (
+                                      name, x.rule_name or x.seq, q.rule_name or q.seq, getattr(q, 'lineno', 0),
+                                      q.src_ref, q.dst_ref, q.svc_ref),
+                        'line': getattr(d, 'lineno', 0), 'b_rule': x.rule_name or str(x.seq),
+                        'b_allows': [r.rule_name or str(r.seq) for r in diff]})
     b_mapped, b_real = IPSet(), IPSet()
     for n in B.nats:
         if n.kind == 'static' and n.mapped is not None and not n.mapped.is_any() and n.mapped != n.real:
@@ -309,19 +570,97 @@ def compare_firewide(A, B, prof):
             continue
         out.append({'id': 'FW-N-%s' % repr(n.mapped), 'check': 'published on A, no NAT on B', 'status': 'missing',
                     'item': repr(n.mapped), 'detail': '%s (%s) -> %s' % (n.real_ref, repr(n.real), n.mapped_ref),
+                    'real_ip': repr(n.real).split('-')[0].split('/')[0].split(',')[0],
                     'line': getattr(n, 'lineno', 0)})
-    done = set()
+    out += source_checks(A, B, prof, b_rules)
+    return out
+
+
+def dependent_allows(a_rules, b_rules, denies, prof):
+    """A allows above the first of these blocks that overlap it and that B does not carry: copying the block alone
+    would cut those hosts off"""
+    first = min(denies, key=lambda r: a_rules.index(r) if r in a_rules else 10 ** 6)
+    if first not in a_rules:
+        return []
+    out = {}
+    for p in a_rules[:a_rules.index(first)]:
+        if p.action not in PERMIT or l7_any(p):
+            continue
+        for d in denies:
+            if d.src_ifc not in (None, p.src_ifc) and p.src_ifc is not None:
+                continue
+            if d.dst_ifc not in (None, p.dst_ifc) and p.dst_ifc is not None:
+                continue
+            src, dst, svc = p.src & d.src, p.dst & d.dst, p.svc & d.svc
+            if not (src and dst and svc):
+                continue
+            st, m, det = eval_slice(b_rules, prof.map_ifc(p.src_ifc), prof.map_ifc(p.dst_ifc), src, dst, svc)
+            if st != 'covered':
+                k = p.rule_name or p.rule_id or p.line
+                out.setdefault(k, {'rule': k, 'line': getattr(p, 'lineno', 0), 'src': p.src_ref, 'dst': p.dst_ref,
+                                   'service': p.svc_ref, 'b_status': st, '_rule': p, 'deny': d.rule_name or d.line})
+            break
+    return list(out.values())
+
+
+def position_diff(a_rules, b_rules, d, x, prof):
+    """B allows above block x that take part of d's traffic, where A has no allow above its equal block d"""
+    if x not in b_rules or d not in a_rules:
+        return []
+    si, di = prof.map_ifc(d.src_ifc), prof.map_ifc(d.dst_ifc)
+    above_a = a_rules[:a_rules.index(d)]
+    out = []
+    for q in b_rules[:b_rules.index(x)]:
+        if q.action not in PERMIT or l7_any(q):
+            continue
+        if not (_ifc_ok(q.src_ifc, si)[0] and _ifc_ok(q.dst_ifc, di)[0]):
+            continue
+        src, dst, svc = q.src & d.src, q.dst & d.dst, q.svc & d.svc
+        if not (src and dst and svc):
+            continue
+        st, m, det = eval_slice(above_a, False, False, src, dst, svc)
+        if st != 'covered':
+            out.append(q)
+    return out
+
+
+def source_checks(A, B, prof, b_rules):
+    """B rules whose source is not behind their source interface. Such a rule may still carry traffic that arrives
+    from the other site today (the source's own interface on B is shut): then the fix is to add the new zone and keep
+    the old one. A rule whose traffic another rule carries, or whose source only exists at A, is optional cleanup."""
+    from .detect import route_split, route_split_up, specific_ifc
+    out, done = [], set()
     for r in b_rules:
         if r.action not in PERMIT or not r.src_ifc or r.src.is_any() or r.src_ifc in prof.outside_b:
             continue
-        ifcs = {i for i, x in route_split(B, r.src)}
+        parts = route_split(B, r.src)
+        ifcs = {i for i, x in parts}
         name = r.rule_name or r.rule_id
-        if r.src_ifc not in ifcs and name not in done:
-            done.add(name)
-            out.append({'id': 'FW-R-%s' % name, 'check': 'B rule source not behind its interface', 'status': 'never matches',
-                        'item': name, 'detail': 'source interface %s, but %s routes via %s' % (
-                            r.src_ifc, r.src_ref, ', '.join(sorted(i or 'nothing' for i in ifcs))),
-                        'line': getattr(r, 'lineno', 0)})
+        if r.src_ifc in ifcs or name in done:
+            continue
+        done.add(name)
+        detail = 'source interface %s, but %s routes via %s' % (r.src_ifc, r.src_ref, ', '.join(sorted(i or 'nothing' for i in ifcs)))
+        row = {'id': 'FW-R-%s' % name, 'check': 'B rule source not behind its interface', 'status': 'never matches',
+               'item': name, 'detail': detail, 'line': getattr(r, 'lineno', 0), 'src_ifc': r.src_ifc}
+        today = {i for i, x in route_split_up(B, r.src)}
+        moved = sorted(i for i in ifcs if i and i != r.src_ifc)
+        bi = B.interfaces.get(r.src_ifc)
+        held = bi is not None and not bi.shutdown and moved and all(
+            B.interfaces.get(i) is not None and B.interfaces[i].shutdown for i in moved)
+        if (r.src_ifc in today or held) and moved:
+            row.update(check='B rule source moves at takeover', status='add zone', add_zone=moved,
+                       detail='%s carries %s from the other site today; once %s %s up, B routes it via %s' % (
+                           r.src_ifc, r.src_ref, ', '.join(moved), 'is' if len(moved) == 1 else 'are', ', '.join(moved)))
+        else:
+            main = max(parts, key=lambda x: x[1].size())[0] if parts else ''
+            st, m, det = eval_slice([x for x in b_rules if x is not r], main or None, r.dst_ifc, r.src, r.dst, r.svc)
+            if st == 'covered' and m:
+                row.update(status='optional cleanup', carried_by=m[0].rule_name or str(m[0].seq),
+                           detail=detail + '; rule "%s" carries this traffic' % (m[0].rule_name or m[0].seq))
+            elif specific_ifc(A, r.src) and not specific_ifc(B, r.src):
+                row.update(status='optional cleanup', failed_site_only=True,
+                           detail=detail + '; the source only exists at A')
+        out.append(row)
     return out
 
 
@@ -434,6 +773,49 @@ def pub_size(n):
     return n.mapped.size() if n.mapped is not None and not n.mapped.is_any() else n.real.size()
 
 
+def b_real_ifc(B, prof, n):
+    """the B interface that holds the real addresses of A NAT n: A's real interface mapped to B when B routes them
+    there (or has no specific route for them), else the interface B routes them to; '' when neither is known.
+    Never the interface of another network."""
+    from .detect import specific_ifc
+    want = prof.map_ifc(n.real_ifc) if n.real_ifc not in (None, '', 'any') else ''
+    routed = specific_ifc(B, n.real) or ''
+    if want in B.interfaces and (not routed or routed == want):
+        return want
+    return routed
+
+
+def b_mapped_ifc(B, prof, n, outs_b):
+    m = prof.map_ifc(n.mapped_ifc)
+    return m if m in B.interfaces else (outs_b[0] if outs_b else '')
+
+
+def inbound_status(b_rules, a_in, n, prof, outs_b, ri, a_rules=None):
+    """each A rule toward the server, with its own source, ports and interfaces, walked on B by first match; a B
+    block equal to an A block above the rule is not a difference: (covered | partial | missing, matched B rules)"""
+    sts, matched = [], []
+    bidx = block_index(a_rules) if a_rules else None
+    for r in a_in:
+        skip = same_blocks(b_rules, a_blocks_above(a_rules, r, bidx), prof) if a_rules and id(r) in bidx else ()
+        dst = r.dst & n.real
+        sis = [prof.map_ifc(r.src_ifc)] if r.src_ifc else list(outs_b) or [None]
+        di = ri or prof.map_ifc(r.dst_ifc)
+        best, hit = 'missing', []
+        for si in sis:
+            st, m, det = eval_slice(b_rules, si, di, r.src, dst, r.svc, skip)
+            if ORDER.index(st) < ORDER.index(best):
+                best, hit = st, m
+        if best == 'partial' and _same_on_b(r, b_rules, sis[0], di) is not None:
+            best = 'covered'
+        sts.append(best)
+        matched += [x for x in hit if x not in matched and x.action in PERMIT]
+    if sts and all(x == 'covered' for x in sts):
+        return 'covered', matched
+    if any(x in ('covered', 'partial') for x in sts):
+        return 'partial', matched
+    return 'missing', matched
+
+
 def compare_nat(A, B, prof):
     scope = prof.scope_set()
     pub_b = b_public(B, prof)
@@ -449,6 +831,12 @@ def compare_nat(A, B, prof):
                     b_mapped_use.setdefault(h, []).append(n)
     pool = Pool(prof, B, b_reserved)
     b_rules = effective_rules(B)
+    a_eff = effective_rules(A)
+    alias = {repr(n.raw_real): repr(n.real) for n in A.nats if getattr(n, 'raw_real', None) is not None}
+
+    def hosts_on(pub):
+        """distinct inside hosts B maps pub to; A's own address and its site translation are one host"""
+        return {alias.get(repr(x.real), repr(x.real)) for x in b_mapped_use.get(pub, [])}
     nats, inbound, dns = [], [], []
     for n in A.nats:
         if not n.real.overlaps(scope) or n.real.is_any():
@@ -463,15 +851,21 @@ def compare_nat(A, B, prof):
         if kind == 'static':
             a_in = inbound_rules(A, n.real, outs_a) if not n.inactive else []
             row['outbound_only'] = not a_in
-            cands = [m for m in B.nats if nat_kind(m) == 'static' and m.real == n.real]
+            raw = getattr(n, 'raw_real', None)
+            cands = [m for m in B.nats if nat_kind(m) == 'static' and (m.real == n.real or (raw is not None and m.real == raw))]
             active = [m for m in cands if not m.inactive]
             a_pub = _first_host(n.mapped)
             b_pub = ''
+            ri, mo = b_real_ifc(B, prof, n), b_mapped_ifc(B, prof, n, outs_b)
+            row.update(b_real_ifc=ri, b_mapped_ifc=mo)
             if active:
                 m = active[0]
                 b_pub = _first_host(m.mapped)
                 status, notes = 'match', []
-                if shared and m.mapped != n.mapped:
+                twin = raw is not None and raw != n.real and m.real == n.real and m.mapped != n.mapped
+                if twin:
+                    status, notes = 'each site has its own', ['B has its own server and public IP for this site address']
+                elif shared and m.mapped != n.mapped:
                     status, notes = 'mapped conflict', ['shared public subnet: B must use the same public IP as A']
                 elif not shared:
                     if m.mapped is not None and pub_b and not m.mapped.issubset(pub_b):
@@ -479,9 +873,13 @@ def compare_nat(A, B, prof):
                     if m.mapped == n.mapped and n.mapped is not None:
                         status = 'mapped reuse'
                         notes.append('B uses the same public IP as A')
-                if b_pub and len(b_mapped_use.get(b_pub, [])) > 1:
+                if b_pub and len(hosts_on(b_pub)) > 1:
                     status = 'mapped conflict'
-                    notes.append('%d B NATs map to %s' % (len(b_mapped_use[b_pub]), b_pub))
+                    notes.append('%d B NATs map %s to different hosts' % (len(hosts_on(b_pub)), b_pub))
+                if status != 'mapped conflict' and not twin and ri and (m.real_ifc not in ('any', ri) or
+                                                                      m.mapped_ifc not in ('any', mo)):
+                    status = 'wrong interface'
+                    notes.append('B NAT is on (%s,%s); the server is behind %s' % (m.real_ifc, m.mapped_ifc, ri))
                 row.update(status=status, b_nat='#%d %s' % (m.seq, m.real_ref), b_mapped=b_pub, detail='; '.join(notes), _b_nat=m)
             elif cands:
                 m = cands[0]
@@ -491,7 +889,7 @@ def compare_nat(A, B, prof):
                 detail = 'no B static NAT for %s' % repr(n.real)
                 if shared:
                     b_pub = a_pub
-                    other = [m for m in b_mapped_use.get(a_pub, []) if m.real != n.real]
+                    other = [m for m in b_mapped_use.get(a_pub, []) if alias.get(repr(m.real), repr(m.real)) != repr(n.real)]
                     if other:
                         row.update(status='mapped conflict', b_nat='', b_mapped='', proposed_b_mapped=a_pub,
                                    detail='%s already maps %s on B' % (a_pub, other[0].real_ref))
@@ -511,16 +909,12 @@ def compare_nat(A, B, prof):
                     svc = Service()
                     for r in a_in:
                         svc = svc | r.svc
-                    b_in = []
-                    st_rule = 'missing'
-                    for o in outs_b:
-                        st, matched, det = eval_slice(b_rules, o, prof.map_ifc(n.real_ifc), IPSet.any(), n.real, svc)
-                        if st in ('covered', 'partial'):
-                            st_rule, b_in = st, matched
-                            break
+                    st_rule, b_in = inbound_status(b_rules, a_in, n, prof, outs_b, row.get('b_real_ifc', ''), a_eff)
                     nat_ok = row['status'] in ('match', 'mapped reuse', 'mapped outside B public')
                     ready = 'ready' if nat_ok and st_rule == 'covered' else (
                         'nat %s, rule %s' % ('ok' if nat_ok else row['status'], st_rule))
+                    if row['status'] == 'each site has its own':
+                        ready = 'ready: each site has its own'
                     ports = sorted({r.svc_ref for r in a_in})
                     bp = row.get('b_mapped') or row.get('proposed_b_mapped', '')
                     inbound.append({'id': 'I%d' % n.seq, 'object': n.real_ref, 'real': repr(n.real),
@@ -529,7 +923,8 @@ def compare_nat(A, B, prof):
                                     'b_rules': ', '.join(sorted({r.rule_name or str(r.seq) for r in b_in})),
                                     'status': ready, 'scope': row['scope'], 'scopes': row['scopes'], 'nat_id': row['id'],
                                     '_nat': n, '_svc': svc, '_a_rules': a_in, '_b_rules': b_in, '_b_nat': row.get('_b_nat'),
-                                    'nat_status': row['status'], 'rule_status': st_rule, 'description': n.description})
+                                    'nat_status': row['status'], 'rule_status': st_rule, 'description': n.description,
+                                    'b_real_ifc': row.get('b_real_ifc', ''), 'b_mapped_ifc': row.get('b_mapped_ifc', '')})
                     dns.append({'host': n.real_ref, 'description': n.description, 'real_ip': repr(n.real),
                                 'a_public_ip': a_pub, 'b_public_ip': bp, 'b_status': row['status'], 'ports': ', '.join(ports),
                                 'scope': row['scope']})
@@ -679,15 +1074,20 @@ def compare_routing(A, B, prof):
         a_ifc = max(a_parts, key=lambda x: x[1].size())[0] if a_parts else ''
         want_role = ra.get(a_ifc, ('inside',))[0]
         want = prof.map_ifc(a_ifc) if a_ifc else ''
-        parts = route_split(B, s)
+        ign = set(A.ignored or ()) | {prof.interface_map.get(x) for x in (A.ignored or ()) if prof.interface_map.get(x)}
+        parts = [(ifc, sub) for ifc, sub in route_split(B, s) if ifc not in ign]     # left out on A as well
         desc, worst = [], 'ok'
         for ifc, sub in parts:
             role = rb.get(ifc, ('',))[0]
+            # each part is judged against A's route for that same part (a subnet A splits over two interfaces)
+            same = [(ai, x) for ai, x in a_parts if ai and x.overlaps(sub)]
+            w_role, w_ifc = (ra.get(same[0][0], ('inside',))[0], prof.map_ifc(same[0][0])) if len(same) == 1 else \
+                (want_role, want)
             if not ifc:
                 st = 'no route on B'
-            elif role != want_role:
+            elif role != w_role:
                 st = 'wrong way'
-            elif ifc != want:
+            elif ifc != w_ifc:
                 st = 'other %s interface' % role
             else:
                 st = 'ok'
@@ -743,7 +1143,7 @@ def compare_objects(A, B, prof):
         b = B.objects.get(bname)
         if b is not None:
             bv = b.addrs if b.kind != 'group' else _group_addrs(B, b)
-            same = bv == addrs or bv == getattr(o, 'raw_addrs', None)         # B may name A's own address on purpose
+            same = bv == addrs or bv == raw_addrs(A, o)         # B may name A's own address on purpose
             superset = o.kind == 'group' and b.kind == 'group' and addrs.issubset(bv)
             st = 'same' if same else 'B has extra entries' if superset else 'same name, different value'
             other = repr(bv) if st != 'same' else ''
@@ -774,18 +1174,27 @@ def compare_objects_reverse(A, B, prof):
     return out
 
 
-def _group_addrs(cfg, o, seen=None):
+def _group_addrs(cfg, o, seen=None, raw=False):
+    """expanded addresses of a group; raw = before site translation"""
     seen = seen or set()
     s = IPSet()
-    for m in o.members:
+    for m in (getattr(o, 'raw_members', o.members) if raw else o.members):
         if m.startswith('obj:'):
             x = cfg.objects.get(m[4:])
             if x is None or x.name in seen:
                 continue
-            s = s | (x.addrs if x.kind != 'group' else _group_addrs(cfg, x, seen | {o.name}))
+            s = s | (raw_addrs(cfg, x, seen | {o.name}) if raw else
+                     x.addrs if x.kind != 'group' else _group_addrs(cfg, x, seen | {o.name}))
         else:
             s = s | IPSet.parse(m)
     return s
+
+
+def raw_addrs(cfg, o, seen=None):
+    """an object's expanded value as configured, before site translation"""
+    if o.kind == 'group':
+        return _group_addrs(cfg, o, seen, raw=True)
+    return getattr(o, 'raw_addrs', o.addrs)
 
 
 SECTIONS = ('rules', 'nat', 'pat', 'pat_detail', 'public', 'inbound', 'dns', 'routing', 'objects',
