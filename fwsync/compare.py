@@ -21,6 +21,15 @@ def block_name(name, pat=None):
     return bool(name) and re.search(pat or SUSPECT, re.sub(r'[_\-]+', ' ', name)) is not None
 
 
+def base_rule_name(name):
+    """A rule name without the -NNN that FMC adds when a rule is copied, or stray spaces"""
+    return re.sub(r'-\d{1,4}$', '', (name or '').strip()).strip()
+
+
+def same_rule_name(a, b):
+    return base_rule_name(a) == base_rule_name(b)
+
+
 def _any_side(s, ref):
     """any, also when an ignored interface narrowed A's copy of any (the rule still says any)"""
     return s.is_any() or (ref or '').split(' ')[0] in ('any', 'any4')
@@ -286,7 +295,7 @@ def compare_rules(A, B, prof):
         results, other = [], None
         if l7_any(r):
             same = [x for x in b_rules if l7_any(x) and x.action in PERMIT and x.src_ifc == si and x.dst_ifc == di
-                    and repr(x.svc.items) == repr(r.svc.items) and (x.rule_name or '') == (r.rule_name or '')]
+                    and repr(x.svc.items) == repr(r.svc.items) and same_rule_name(x.rule_name, r.rule_name)]
             results = [(label, 'covered', same[:1], 'same L7 rule on B (any to any): %s that its conditions match' %
                         CONFIRM) if same else (label, 'compare in FMC', [], 'L7 rule shows as any to any in this config')
                        for label, s, d in slices]

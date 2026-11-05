@@ -13,6 +13,9 @@ Tables you can actually read.
 - FMC read: Interface Groups now work like security zones. Before, a NAT rule kept the group name as if it were one
   interface, and an access rule using a group lost its interfaces and was left out. A rule on a group that holds both
   inside and a shut shared interface is judged on each member, so it covers today's path and the outage path.
+- A rule FMC renamed when copying it (`Name-207`, or a stray space) is matched to A's rule when its LINA lines are the
+  same. Before, those L7 rules became Compare in FMC and L7 blocks became Missing block.
+- A NAT exemption for one network on A stays one row with that network, not the pieces B happens to translate.
 - macOS: the launcher only picks Python 3.10 to 3.13, and the README says so. The bundled wheels do not cover 3.14.
 
 ## 0.5.4 – 2026-11-04
